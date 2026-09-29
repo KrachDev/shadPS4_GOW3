@@ -6,6 +6,7 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include "common/elf_info.h"
+#include "common/io_file.h"
 #include "common/singleton.h"
 #include "common/string_util.h"
 #include "core/file_format/psf.h"
@@ -107,7 +108,16 @@ SaveDialogState::SaveDialogState(const OrbisSaveDataDialogParam& param) {
             auto icon_path = dir_path / "sce_sys" / "icon0.png";
             RefCountedTexture icon;
             if (std::filesystem::exists(icon_path)) {
-                icon = RefCountedTexture::DecodePngFile(icon_path);
+                if (mode != SaveDataDialogMode::LIST) {
+                    Common::FS::IOFile icon_file(icon_path, Common::FS::FileAccessMode::Read);
+                    if (icon_file.IsOpen()) {
+                        std::vector<u8> icon_bytes(icon_file.GetSize());
+                        icon_file.Read(icon_bytes);
+                        icon = RefCountedTexture::DecodePngTexture(std::move(icon_bytes));
+                    }
+                } else {
+                    icon = RefCountedTexture::DecodePngFile(icon_path);
+                }
             }
 
             bool is_corrupted = std::filesystem::exists(dir_path / "sce_sys" / "corrupted");
@@ -331,12 +341,12 @@ SaveDialogUi::~SaveDialogUi() {
     Finish(ButtonId::INVALID);
 }
 
-SaveDialogUi::SaveDialogUi(SaveDialogUi&& other) noexcept
-    : Layer(other), state(other.state), status(other.status), result(other.result) {
+SaveDialogUi::SaveDialogUi(SaveDialogUi&& other) noexcept : Layer(other) {
     std::scoped_lock lock(draw_mutex, other.draw_mutex);
-    other.state = nullptr;
-    other.status = nullptr;
-    other.result = nullptr;
+    state = std::exchange(other.state, nullptr);
+    status = std::exchange(other.status, nullptr);
+    result = std::exchange(other.result, nullptr);
+    RemoveLayer(&other);
     if (status && *status == Status::RUNNING) {
         first_render = true;
         AddLayer(this);
@@ -344,14 +354,15 @@ SaveDialogUi::SaveDialogUi(SaveDialogUi&& other) noexcept
 }
 
 SaveDialogUi& SaveDialogUi::operator=(SaveDialogUi&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
     std::scoped_lock lock(draw_mutex, other.draw_mutex);
-    using std::swap;
-    state = other.state;
-    other.state = nullptr;
-    status = other.status;
-    other.status = nullptr;
-    result = other.result;
-    other.result = nullptr;
+    RemoveLayer(this);
+    RemoveLayer(&other);
+    state = std::exchange(other.state, nullptr);
+    status = std::exchange(other.status, nullptr);
+    result = std::exchange(other.result, nullptr);
     if (status && *status == Status::RUNNING) {
         first_render = true;
         AddLayer(this);
@@ -359,14 +370,46 @@ SaveDialogUi& SaveDialogUi::operator=(SaveDialogUi&& other) noexcept {
     return *this;
 }
 
+void SaveDialogUi::Open(SaveDialogState* _state, Status* _status, SaveDialogResult* _result) {
+    std::unique_lock lock(draw_mutex);
+    LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Open: mode={}, items={}, hasNewItem={}",
+             _state ? magic_enum::enum_name(_state->GetMode()) : "NULL",
+             _state ? _state->save_list.size() : 0,
+             _state ? _state->new_item.has_value() : false);
+    RemoveLayer(this);
+    this->state = _state;
+    this->status = _status;
+    this->result = _result;
+    if (status && *status == Status::RUNNING) {
+        first_render = true;
+        AddLayer(this);
+    }
+}
+
+void SaveDialogUi::Reset() {
+    std::unique_lock lock(draw_mutex);
+    LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Reset: hadState={}", state != nullptr);
+    if (state) {
+        *state = SaveDialogState{};
+    }
+    state = nullptr;
+    status = nullptr;
+    result = nullptr;
+    RemoveLayer(this);
+}
+
 void SaveDialogUi::Finish(ButtonId buttonId, Result r) {
     std::unique_lock lock(draw_mutex);
-    if (result) {
+    LOG_INFO(Lib_SaveDataDialog,
+             "[SaveTrace] SaveDialogUi::Finish: mode={}, buttonId={}, result={}",
+             state ? magic_enum::enum_name(state->mode) : "NULL",
+             magic_enum::enum_name(buttonId), magic_enum::enum_name(r));
+    if (result && state) {
         result->mode = this->state->mode;
         result->result = r;
         result->button_id = buttonId;
         result->user_data = this->state->user_data;
-        if (state && state->mode != SaveDataDialogMode::LIST && !state->save_list.empty()) {
+        if (state->mode != SaveDataDialogMode::LIST && !state->save_list.empty()) {
             result->dir_name = state->save_list.front().dir_name;
         }
     }
@@ -381,6 +424,11 @@ void SaveDialogUi::Draw() {
 
     if (status == nullptr || *status != Status::RUNNING || state == nullptr) {
         return;
+    }
+
+    if (first_render) {
+        LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Draw first_render: mode={}",
+                 magic_enum::enum_name(state->GetMode()));
     }
 
     const auto& ctx = *GetCurrentContext();
@@ -452,7 +500,8 @@ void SaveDialogUi::Draw() {
     End();
 
     first_render = false;
-    if (*status == Status::FINISHED) {
+    if (status && *status == Status::FINISHED) {
+        LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Draw cleanup after FINISHED");
         if (state) {
             *state = SaveDialogState{};
         }

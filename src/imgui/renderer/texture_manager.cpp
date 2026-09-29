@@ -152,8 +152,15 @@ void WorkerLoop() {
             g_job_list.pop_front();
             g_job_list_mtx.unlock();
 
+            const auto release_core = [core] {
+                if (core->count.fetch_sub(1) == 1) {
+                    delete core;
+                }
+            };
+
             if (EmulatorSettings.IsVkCrashDiagnosticEnabled()) {
                 // FIXME: Crash diagnostic hangs when building the command buffer here
+                release_core();
                 continue;
             }
 
@@ -161,6 +168,7 @@ void WorkerLoop() {
                 Common::FS::IOFile file(path, Common::FS::FileAccessMode::Read);
                 if (!file.IsOpen()) {
                     LOG_ERROR(ImGui, "Failed to open PNG file: {}", path.string());
+                    release_core();
                     continue;
                 }
                 png_raw.resize(file.GetSize());
@@ -169,9 +177,14 @@ void WorkerLoop() {
                 file.Close();
             }
 
-            int width, height;
+            int width = 0, height = 0;
             const stbi_uc* pixels =
                 stbi_load_from_memory(png_raw.data(), png_raw.size(), &width, &height, nullptr, 4);
+            if (pixels == nullptr) {
+                LOG_ERROR(ImGui, "Failed to decode PNG texture");
+                release_core();
+                continue;
+            }
 
             auto texture = Vulkan::UploadTexture(pixels, vk::Format::eR8G8B8A8Unorm, width, height,
                                                  width * height * 4 * sizeof(stbi_uc));
@@ -240,13 +253,21 @@ void Submit() {
         }
     }
     if (upload.core != nullptr) {
+        LOG_INFO(ImGui, "[SaveTrace] TextureManager::Submit Upload start: core={}",
+                 static_cast<void*>(upload.core));
         upload.core->upload_data.Upload();
         upload.core->texture_id = upload.core->upload_data.im_texture;
+        LOG_INFO(ImGui, "[SaveTrace] TextureManager::Submit Upload done: core={}, tex={}",
+                 static_cast<void*>(upload.core),
+                 static_cast<void*>(upload.core->texture_id));
         if (upload.core->count.fetch_sub(1) == 1) {
             delete upload.core;
         }
     } else {
+        LOG_INFO(ImGui, "[SaveTrace] TextureManager::Submit Destroy start: tex={}",
+                 static_cast<void*>(upload.data.im_texture));
         upload.data.Destroy();
+        LOG_INFO(ImGui, "[SaveTrace] TextureManager::Submit Destroy done");
     }
 }
 } // namespace Core::TextureManager

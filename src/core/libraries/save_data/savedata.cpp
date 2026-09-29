@@ -454,6 +454,8 @@ static Error saveDataMount(const OrbisSaveDataMount2* mount_info,
         }
     }
 
+    LOG_INFO(Lib_SaveData, "[SaveTrace] Mount start: dirName='{}', slot={}, mode=0x{:X}, create={}",
+             dir_name, slot_num, static_cast<u32>(mount_mode), to_be_created);
     try {
         save_instance.SetupAndMount(is_ro, copy_icon, ignore_corrupt);
     } catch (const fs::filesystem_error& e) {
@@ -476,6 +478,8 @@ static Error saveDataMount(const OrbisSaveDataMount2* mount_info,
                                          : OrbisSaveDataMountStatus::NOTHING;
     }
 
+    LOG_INFO(Lib_SaveData, "[SaveTrace] Mount done: dirName='{}' -> mountPoint='{}'", dir_name,
+             save_instance.GetMountPoint());
     g_mount_slots[slot_num].emplace(std::move(save_instance));
 
     return Error::OK;
@@ -490,7 +494,8 @@ static Error Umount(const OrbisSaveDataMountPoint* mountPoint, bool call_backup 
         LOG_INFO(Lib_SaveData, "called with invalid parameter");
         return Error::PARAMETER;
     }
-    LOG_DEBUG(Lib_SaveData, "Umount mountPoint:{}", mountPoint->data.to_view());
+    LOG_INFO(Lib_SaveData, "[SaveTrace] Umount start: mountPoint='{}', backup={}",
+             mountPoint->data.to_view(), call_backup);
 
     std::string mount_point_str = mountPoint->data.to_string();
 
@@ -498,6 +503,7 @@ static Error Umount(const OrbisSaveDataMountPoint* mountPoint, bool call_backup 
         if (instance.has_value()) {
             const auto& slot_name = instance->GetMountPoint();
             if (slot_name == mount_point_str) {
+                const auto dir_name = instance->GetDirName();
                 // TODO: check if is busy
                 instance->Umount();
                 if (call_backup) {
@@ -507,10 +513,13 @@ static Error Umount(const OrbisSaveDataMountPoint* mountPoint, bool call_backup 
                                        OrbisSaveDataEventType::UMOUNT_BACKUP);
                 }
                 instance.reset();
+                LOG_INFO(Lib_SaveData, "[SaveTrace] Umount done: mountPoint='{}' (dirName='{}')",
+                         mount_point_str, dir_name);
                 return Error::OK;
             }
         }
     }
+    LOG_INFO(Lib_SaveData, "[SaveTrace] Umount NOT_FOUND: mountPoint='{}'", mount_point_str);
     return Error::NOT_FOUND;
 }
 
@@ -735,7 +744,7 @@ Error PS4_SYSV_ABI sceSaveDataDelete(const OrbisSaveDataDelete* del) {
         return Error::PARAMETER;
     }
     const std::string_view dirName{del->dirName->data};
-    LOG_DEBUG(Lib_SaveData, "called dirName: {}", dirName);
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataDelete start: dirName='{}'", dirName);
     if (dirName.empty()) {
         return Error::PARAMETER;
     }
@@ -753,6 +762,7 @@ Error PS4_SYSV_ABI sceSaveDataDelete(const OrbisSaveDataDelete* del) {
         LOG_ERROR(Lib_SaveData, "Failed to delete save data: {}", e.what());
         return Error::INTERNAL;
     }
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataDelete done: dirName='{}'", dirName);
     return Error::OK;
 }
 
@@ -787,7 +797,8 @@ Error PS4_SYSV_ABI sceSaveDataDirNameSearch(const OrbisSaveDataDirNameSearchCond
         LOG_INFO(Lib_SaveData, "called with invalid parameter");
         return Error::PARAMETER;
     }
-    LOG_DEBUG(Lib_SaveData, "called");
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataDirNameSearch start: reqMax={}",
+             result->dirNamesNum);
     const std::string_view title_id{cond->titleId == nullptr
                                         ? std::string_view{g_game_serial}
                                         : std::string_view{cond->titleId->data}};
@@ -893,6 +904,8 @@ Error PS4_SYSV_ABI sceSaveDataDirNameSearch(const OrbisSaveDataDirNameSearchCond
         }
     }
 
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataDirNameSearch done: hitNum={}, setNum={}",
+             result->hitNum, max_count);
     return Error::OK;
 }
 
@@ -1379,7 +1392,8 @@ Error PS4_SYSV_ABI sceSaveDataSaveIcon(const OrbisSaveDataMountPoint* mountPoint
         LOG_INFO(Lib_SaveData, "called with invalid parameter");
         return Error::PARAMETER;
     }
-    LOG_DEBUG(Lib_SaveData, "called");
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataSaveIcon start: mountPoint='{}', dataSize={}",
+             mountPoint->data.to_view(), icon->dataSize);
     fs::path path;
     const std::string_view mount_point_str{mountPoint->data};
     for (const auto& instance : g_mount_slots) {
@@ -1403,6 +1417,8 @@ Error PS4_SYSV_ABI sceSaveDataSaveIcon(const OrbisSaveDataMountPoint* mountPoint
         return Error::INTERNAL;
     }
 
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataSaveIcon done: mountPoint='{}'",
+             mount_point_str);
     return Error::OK;
 }
 
@@ -1428,7 +1444,8 @@ Error PS4_SYSV_ABI sceSaveDataSetParam(const OrbisSaveDataMountPoint* mountPoint
         LOG_INFO(Lib_SaveData, "called with invalid parameter");
         return Error::PARAMETER;
     }
-    LOG_DEBUG(Lib_SaveData, "called: paramType = {}", magic_enum::enum_name(paramType));
+    LOG_INFO(Lib_SaveData, "[SaveTrace] sceSaveDataSetParam: mountPoint='{}', paramType={}",
+             mountPoint->data.to_view(), magic_enum::enum_name(paramType));
     PSF* param_sfo = nullptr;
     const std::string_view mount_point_str{mountPoint->data};
     for (auto& instance : g_mount_slots) {
