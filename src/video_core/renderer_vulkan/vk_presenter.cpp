@@ -16,6 +16,7 @@
 #include "imgui/notifications_layer.h"
 #include "imgui/renderer/imgui_core.h"
 #include "imgui/renderer/imgui_impl_vulkan.h"
+#include "imgui/renderer/texture_manager.h"
 #include "imgui/shadnet_notifications_layer.h"
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
@@ -1570,6 +1571,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, const u64 presentat
         draw_scheduler.WaitSubmitted(frame->ready_tick);
     }
     const u64 present_tick = scheduler.CurrentTick();
+    ImGui::Core::TextureManager::EndFrame(scheduler);
     scheduler.Flush(info);
     // Present to swapchain.
     if (mark_latency) {
