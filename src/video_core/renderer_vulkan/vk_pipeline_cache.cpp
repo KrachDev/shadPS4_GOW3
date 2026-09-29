@@ -82,7 +82,6 @@ struct ShaderCompileResult {
     std::vector<u32> debug_spv;
     std::vector<u32> debug_patch;
     vk::ShaderModule module{};
-    std::chrono::steady_clock::time_point started_at{};
     size_t permutation_index{};
     u64 permutation_hash{};
     bool initial_program{};
@@ -140,35 +139,6 @@ struct GraphicsPipelineBuild {
 };
 
 constexpr std::string_view NativePipelineCacheName = "pipeline_cache";
-
-/// A shader compilation burst ends once no shader has been queued for this long.
-constexpr auto ShaderBurstGap = std::chrono::milliseconds{500};
-
-/// Command processor stalls on shader guest data captures, summed per burst so that short stalls
-/// are accounted for without logging each of them.
-struct ShaderStallBurst {
-    std::chrono::steady_clock::time_point first_queued{};
-    std::chrono::steady_clock::time_point last_captured{};
-    std::chrono::nanoseconds stall{};
-    std::chrono::nanoseconds queue{};
-    std::chrono::nanoseconds max_stall{};
-    u64 max_stall_hash{};
-    u32 shaders{};
-};
-
-/// Guarded by the compiler task mutex of the pipeline cache.
-ShaderStallBurst shader_stall_burst;
-
-void LogShaderStallBurst(const ShaderStallBurst& burst) {
-    using Milliseconds = std::chrono::duration<double, std::milli>;
-    const auto stall = Milliseconds{burst.stall}.count();
-    const auto queue = Milliseconds{burst.queue}.count();
-    LOG_INFO(Render_Vulkan,
-             "Shader burst: {} shaders in {:.0f} ms stalled the command processor {:.2f} ms "
-             "(queue {:.2f} ms, translation {:.2f} ms, longest {:.2f} ms on {:#x})",
-             burst.shaders, Milliseconds{burst.last_captured - burst.first_queued}.count(), stall,
-             queue, stall - queue, Milliseconds{burst.max_stall}.count(), burst.max_stall_hash);
-}
 
 /// Translated IR lives in these until a pipeline worker emits its SPIR-V, so they are recycled
 /// here instead of being thread local.
@@ -1516,9 +1486,6 @@ void PipelineCache::StopGraphicsPipelineCompiler() {
         task();
     }
     graphics_pipeline_tasks.clear();
-    if (shader_stall_burst.shaders != 0) {
-        LogShaderStallBurst(std::exchange(shader_stall_burst, {}));
-    }
 }
 
 void PipelineCache::WaitForGraphicsPipelineCompiler() {
@@ -1546,15 +1513,7 @@ void PipelineCache::CompilerThread(bool shader_module_lane, u32 worker_index) {
         {
             std::unique_lock lock{graphics_pipeline_tasks_mutex};
             while (!graphics_pipeline_compiler_stopping && tasks.empty()) {
-                // The shader module lane also closes the stall burst once shaders stop coming.
-                if (!shader_module_lane || shader_stall_burst.shaders == 0) {
-                    tasks_cv.wait(lock);
-                } else if (const auto burst_end = shader_stall_burst.last_captured + ShaderBurstGap;
-                           std::chrono::steady_clock::now() < burst_end) {
-                    tasks_cv.wait_until(lock, burst_end);
-                } else {
-                    LogShaderStallBurst(std::exchange(shader_stall_burst, {}));
-                }
+                tasks_cv.wait(lock);
             }
             if (tasks.empty()) {
                 return;
@@ -2202,7 +2161,6 @@ void PipelineCache::QueueProgramCompilation(
                                              guest_data_promise = std::move(guest_data_promise),
                                              completion_promise =
                                                  std::move(completion_promise)]() mutable {
-        result->started_at = std::chrono::steady_clock::now();
         auto& info = result->info;
         const auto perm_idx = result->permutation_index;
         auto pools = AcquireShaderPools();
@@ -2276,36 +2234,8 @@ void PipelineCache::QueueProgramCompilation(
     }};
     program.pending_compilation.emplace(
         Program::PendingCompilation{.result = result, .completion = std::move(completion)});
-    const auto queued_at = std::chrono::steady_clock::now();
     QueueShaderModuleTask(std::move(compile_task));
     guest_data_captured.get();
-
-    // The capture happened-before the promise was satisfied, so started_at is visible here.
-    const auto captured_at = std::chrono::steady_clock::now();
-    const std::chrono::nanoseconds stall = captured_at - queued_at;
-    bool burst_opened{};
-    {
-        std::scoped_lock lock{graphics_pipeline_tasks_mutex};
-        auto& burst = shader_stall_burst;
-        if (burst.shaders != 0 && queued_at - burst.last_captured >= ShaderBurstGap) {
-            LogShaderStallBurst(std::exchange(burst, {}));
-        }
-        if (burst.shaders++ == 0) {
-            burst.first_queued = queued_at;
-            burst_opened = true;
-        }
-        burst.last_captured = captured_at;
-        burst.stall += stall;
-        burst.queue += result->started_at - queued_at;
-        if (stall > burst.max_stall) {
-            burst.max_stall = stall;
-            burst.max_stall_hash = params.hash;
-        }
-    }
-    if (burst_opened) {
-        // Wakes a shader module worker to close the burst once shaders stop coming.
-        shader_module_tasks_cv.notify_one();
-    }
 }
 
 bool PipelineCache::PublishProgramCompilation(Program& program) {

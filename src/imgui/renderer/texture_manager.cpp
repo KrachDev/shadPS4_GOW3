@@ -258,22 +258,14 @@ void Submit() {
         g_upload_list.pop_front();
     }
     if (upload.core != nullptr) {
-        LOG_DEBUG(ImGui, "[SaveTrace] TextureManager::Submit Upload start: core={}",
-                 static_cast<void*>(upload.core));
         upload.core->upload_data.Upload();
         upload.core->texture_id.store(upload.core->upload_data.im_texture,
                                       std::memory_order_release);
-        LOG_DEBUG(ImGui, "[SaveTrace] TextureManager::Submit Upload done: core={}, tex={}",
-                 static_cast<void*>(upload.core),
-                 static_cast<void*>(upload.core->upload_data.im_texture));
         if (upload.core->count.fetch_sub(1) == 1) {
             delete upload.core;
         }
     } else {
-        LOG_DEBUG(ImGui, "[SaveTrace] TextureManager::Submit Destroy start: tex={}",
-                 static_cast<void*>(upload.data.im_texture));
         upload.data.Destroy();
-        LOG_DEBUG(ImGui, "[SaveTrace] TextureManager::Submit Destroy done");
     }
 }
 

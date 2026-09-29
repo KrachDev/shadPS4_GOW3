@@ -372,10 +372,6 @@ SaveDialogUi& SaveDialogUi::operator=(SaveDialogUi&& other) noexcept {
 
 void SaveDialogUi::Open(SaveDialogState* _state, Status* _status, SaveDialogResult* _result) {
     std::unique_lock lock(draw_mutex);
-    LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Open: mode={}, items={}, hasNewItem={}",
-             _state ? magic_enum::enum_name(_state->GetMode()) : "NULL",
-             _state ? _state->save_list.size() : 0,
-             _state ? _state->new_item.has_value() : false);
     RemoveLayer(this);
     this->state = _state;
     this->status = _status;
@@ -388,7 +384,6 @@ void SaveDialogUi::Open(SaveDialogState* _state, Status* _status, SaveDialogResu
 
 void SaveDialogUi::Reset() {
     std::unique_lock lock(draw_mutex);
-    LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Reset: hadState={}", state != nullptr);
     if (state) {
         *state = SaveDialogState{};
     }
@@ -400,10 +395,6 @@ void SaveDialogUi::Reset() {
 
 void SaveDialogUi::Finish(ButtonId buttonId, Result r) {
     std::unique_lock lock(draw_mutex);
-    LOG_INFO(Lib_SaveDataDialog,
-             "[SaveTrace] SaveDialogUi::Finish: mode={}, buttonId={}, result={}",
-             state ? magic_enum::enum_name(state->mode) : "NULL",
-             magic_enum::enum_name(buttonId), magic_enum::enum_name(r));
     if (result && state) {
         result->mode = this->state->mode;
         result->result = r;
@@ -424,11 +415,6 @@ void SaveDialogUi::Draw() {
 
     if (status == nullptr || *status != Status::RUNNING || state == nullptr) {
         return;
-    }
-
-    if (first_render) {
-        LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Draw first_render: mode={}",
-                 magic_enum::enum_name(state->GetMode()));
     }
 
     const auto& ctx = *GetCurrentContext();
@@ -501,7 +487,6 @@ void SaveDialogUi::Draw() {
 
     first_render = false;
     if (status && *status == Status::FINISHED) {
-        LOG_INFO(Lib_SaveDataDialog, "[SaveTrace] SaveDialogUi::Draw cleanup after FINISHED");
         if (state) {
             *state = SaveDialogState{};
         }
