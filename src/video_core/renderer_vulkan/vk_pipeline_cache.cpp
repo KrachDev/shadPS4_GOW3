@@ -211,9 +211,12 @@ void RemoveLegacyNativePipelineCache() {
 template <typename DescriptorList, typename ResourceList>
 void ResolveResourceList(const DescriptorList& descriptors, ResourceList& resources,
                          const Shader::Info& info) {
-    resources.resize(descriptors.size(), boost::container::default_init);
-    for (size_t index = 0; index < descriptors.size(); ++index) {
-        resources[index] = descriptors[index].GetSharp(info);
+    const size_t count = descriptors.size();
+    resources.resize(count, boost::container::default_init);
+    auto* const destination = resources.data();
+    const auto* const source = descriptors.data();
+    for (size_t index = 0; index < count; ++index) {
+        destination[index] = source[index].GetSharp(info);
     }
 }
 
@@ -1227,7 +1230,8 @@ SHAD_NO_INLINE void PipelineCache::BuildGeometryRuntimeInfo(Shader::RuntimeInfo&
     DumpShader(gs_info.vs_copy, gs_info.vs_copy_hash, Shader::Stage::Vertex, 0, "copy.bin");
 }
 
-const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalStage l_stage) {
+SHAD_NOINLINE const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage,
+                                                                       LogicalStage l_stage) {
     auto& info = runtime_infos[u32(l_stage)];
     const auto& regs = liverpool->regs;
     info.Initialize(stage);
@@ -1288,7 +1292,8 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
         BuildCommonRuntimeInfo(info, regs.ps_program);
         info.fs_info.en_flags = regs.ps_input_ena;
         info.fs_info.addr_flags = regs.ps_input_addr;
-        info.fs_info.num_inputs = regs.num_interp;
+        const u32 num_inputs = regs.num_interp;
+        info.fs_info.num_inputs = num_inputs;
         info.fs_info.z_export_format = regs.z_export_format;
         u8 stencil_ref_export_enable = regs.depth_shader_control.stencil_op_val_export_enable |
                                        regs.depth_shader_control.stencil_test_val_export_enable;
@@ -1310,7 +1315,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage, LogicalS
             info.fs_info.dual_source_blending = false;
         }
         const auto& ps_inputs = regs.ps_inputs;
-        for (u32 i = 0; i < regs.num_interp; i++) {
+        for (u32 i = 0; i < num_inputs; ++i) {
             info.fs_info.inputs[i] = {
                 .param_index = u8(ps_inputs[i].input_offset),
                 .is_default = bool(ps_inputs[i].use_default),

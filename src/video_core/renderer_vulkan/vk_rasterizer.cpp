@@ -840,7 +840,7 @@ static std::pair<u32, u32> GetDrawOffsets(
     return {vertex_offset, instance_offset};
 }
 
-void Rasterizer::EliminateFastClear() {
+SHAD_NO_INLINE void Rasterizer::EliminateFastClear() {
     auto& col_buf = liverpool->regs.color_buffers[0];
     if (!col_buf || !col_buf.info.fast_clear) {
         return;
@@ -1319,7 +1319,7 @@ void Rasterizer::BindPipelineResources(const Pipeline* pipeline) {
     }
 }
 
-bool Rasterizer::IsComputeMetaClear(const Pipeline* pipeline) {
+SHAD_NOINLINE bool Rasterizer::IsComputeMetaClear(const Pipeline* pipeline) {
     if (!pipeline->IsCompute()) {
         return false;
     }
@@ -1358,7 +1358,7 @@ bool Rasterizer::IsComputeMetaClear(const Pipeline* pipeline) {
     return false;
 }
 
-bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
+SHAD_NOINLINE bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     if (!pipeline->IsCompute()) {
         return false;
     }
@@ -1425,7 +1425,7 @@ bool Rasterizer::IsComputeImageCopy(const Pipeline* pipeline) {
     return true;
 }
 
-bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
+SHAD_NOINLINE bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     if (!pipeline->IsCompute()) {
         return false;
     }
@@ -1845,7 +1845,8 @@ SHAD_NO_INLINE void Rasterizer::RefreshCachedView(CachedImageView& cached_view,
     };
 }
 
-void Rasterizer::BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
+SHAD_NOINLINE void Rasterizer::BindTextures(const Shader::Info& stage,
+                                          Shader::Backend::Bindings& binding) {
     image_bindings.clear();
     const u32 first_image_idx = image_infos.size();
     const u32 stage_index = static_cast<u32>(stage.l_stage);
@@ -2211,7 +2212,7 @@ RenderState Rasterizer::BeginRendering(const GraphicsPipeline* pipeline) {
     return state;
 }
 
-void Rasterizer::Resolve() {
+SHAD_NO_INLINE void Rasterizer::Resolve() {
     const auto& mrt0_hint = liverpool->last_cb_extent[0];
     const auto& mrt1_hint = liverpool->last_cb_extent[1];
     VideoCore::TextureCache::ImageDesc mrt0_desc{liverpool->regs.color_buffers[0], mrt0_hint};
@@ -2226,7 +2227,7 @@ void Rasterizer::Resolve() {
     ScopeMarkerEnd();
 }
 
-void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
+SHAD_NO_INLINE void Rasterizer::DepthStencilCopy(bool is_depth, bool is_stencil) {
     auto& regs = liverpool->regs;
 
     auto read_desc = VideoCore::TextureCache::ImageDesc(
@@ -2466,7 +2467,7 @@ void Rasterizer::UpdateDynamicState(const GraphicsPipeline* pipeline, const bool
     dynamic_state.Commit(instance, scheduler);
 }
 
-void Rasterizer::UpdateViewportScissorState() const {
+SHAD_NOINLINE void Rasterizer::UpdateViewportScissorState() const {
     const auto& regs = liverpool->regs;
 
     const auto combined_scissor_value_tl = [](s16 scr, s16 win, s16 gen, s16 win_offset) {
@@ -2530,7 +2531,7 @@ void Rasterizer::UpdateViewportScissorState() const {
                                            MakeViewportScissor(regs, scsr, first));
 }
 
-void Rasterizer::UpdateDepthStencilState() const {
+SHAD_NOINLINE void Rasterizer::UpdateDepthStencilState() const {
     const auto& regs = liverpool->regs;
     auto& dynamic_state = scheduler.GetDynamicState();
 

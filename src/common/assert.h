@@ -15,8 +15,10 @@ void assert_fail_impl();
 [[noreturn]] void unreachable_impl();
 
 #ifdef _MSC_VER
-#define SHAD_NO_INLINE __declspec(noinline)
+#define SHAD_NOINLINE __declspec(noinline)
+#define SHAD_NO_INLINE SHAD_NOINLINE
 #else
+#define SHAD_NOINLINE __attribute__((noinline))
 #define SHAD_NO_INLINE __attribute__((cold, noinline))
 #endif
 
