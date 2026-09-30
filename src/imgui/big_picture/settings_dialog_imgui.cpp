@@ -65,8 +65,9 @@ void SettingsWindow::LoadSettings(std::string profile) {
     windowHeightSetting = EmulatorSettings.GetWindowHeight();
     windowWidthSetting = EmulatorSettings.GetWindowWidth();
     hdrAllowedSetting = EmulatorSettings.IsHdrAllowed();
-    fsrEnabledSetting = EmulatorSettings.IsFsrEnabled();
-    rcasEnabledSetting = EmulatorSettings.IsRcasEnabled();
+    upscalerSetting = EmulatorSettings.GetUpscaler();
+    antiAliasingSetting = EmulatorSettings.GetAntiAliasing();
+    sharpeningSetting = EmulatorSettings.GetSharpening();
     rcasAttenuationSetting = static_cast<float>(EmulatorSettings.GetRcasAttenuation() * 0.001f);
 
     /////////// Input Tab
@@ -132,8 +133,9 @@ void SettingsWindow::SaveSettings(std::string profile) {
     EmulatorSettings.SetWindowHeight(windowHeightSetting, isSpecific);
     EmulatorSettings.SetWindowWidth(windowWidthSetting, isSpecific);
     EmulatorSettings.SetHdrAllowed(hdrAllowedSetting, isSpecific);
-    EmulatorSettings.SetFsrEnabled(fsrEnabledSetting, isSpecific);
-    EmulatorSettings.SetRcasEnabled(rcasEnabledSetting, isSpecific);
+    EmulatorSettings.SetUpscaler(upscalerSetting, isSpecific);
+    EmulatorSettings.SetAntiAliasing(antiAliasingSetting, isSpecific);
+    EmulatorSettings.SetSharpening(sharpeningSetting, isSpecific);
     EmulatorSettings.SetRcasAttenuation(static_cast<int>(rcasAttenuationSetting * 1000),
                                         isSpecific);
 
@@ -711,13 +713,11 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             AddSettingSliderInt("Window Width", windowWidthSetting, 0, 8000);
             AddSettingSliderInt("Window Height", windowHeightSetting, 0, 7000);
             AddSettingCheckbox("Enable HDR", hdrAllowedSetting);
-            AddSettingCheckbox("Enable FSR", fsrEnabledSetting);
-
-            if (fsrEnabledSetting) {
-                AddSettingCheckbox("Enable RCAS", rcasEnabledSetting);
-            }
-
-            if (rcasEnabledSetting && fsrEnabledSetting) {
+            AddSettingCombo("Anti-aliasing", antiAliasingSetting,
+                            {"None", "FSR1", "GSR1", "PSMAA", "CMAA2", "TDAA"});
+            AddSettingCombo("Upscaler / Downscaler", upscalerSetting, {"None", "FSR1", "GSR1"});
+            AddSettingCombo("Sharpening", sharpeningSetting, {"None", "RCAS"});
+            if (sharpeningSetting == 1) {
                 AddSettingSliderFloat("RCAS Attenuation", rcasAttenuationSetting, 0.0f, 3.0f, 3);
             }
 

@@ -1,0 +1,161 @@
+// SPDX-FileCopyrightText: Copyright 2023 Qualcomm Innovation Center, Inc.
+// SPDX-License-Identifier: BSD-3-Clause
+
+#version 450
+#extension GL_EXT_spirv_intrinsics : require
+#ifndef PSMAA_LUMA_FORMAT
+#define PSMAA_LUMA_FORMAT r16f
+#endif
+#ifndef PSMAA_VECTOR_FORMAT
+#define PSMAA_VECTOR_FORMAT rg16f
+#endif
+#ifndef CMAA_EDGE_FORMAT
+#define CMAA_EDGE_FORMAT r8ui
+#endif
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(push_constant, std430) uniform type_PushConstant_Constants
+{
+    vec4 metrics;
+    vec4 target;
+    uint history_valid;
+} params;
+
+layout(set = 0, binding = 0) uniform texture2D tex0;
+layout(set = 0, binding = 9) uniform sampler linear_sampler;
+layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D output0;
+
+spirv_instruction(set = "GLSL.std.450", id = 79) float spvNMin(float, float);
+spirv_instruction(set = "GLSL.std.450", id = 79) vec2 spvNMin(vec2, vec2);
+spirv_instruction(set = "GLSL.std.450", id = 79) vec3 spvNMin(vec3, vec3);
+spirv_instruction(set = "GLSL.std.450", id = 79) vec4 spvNMin(vec4, vec4);
+spirv_instruction(set = "GLSL.std.450", id = 80) float spvNMax(float, float);
+spirv_instruction(set = "GLSL.std.450", id = 80) vec2 spvNMax(vec2, vec2);
+spirv_instruction(set = "GLSL.std.450", id = 80) vec3 spvNMax(vec3, vec3);
+spirv_instruction(set = "GLSL.std.450", id = 80) vec4 spvNMax(vec4, vec4);
+
+void main()
+{
+    do
+    {
+        if (any(greaterThanEqual(gl_GlobalInvocationID.xy, uvec2(params.target.zw))))
+        {
+            break;
+        }
+        vec2 _61 = (vec2(gl_GlobalInvocationID.xy) + vec2(0.5)) * params.target.xy;
+        vec4 _67 = textureLod(sampler2D(tex0, linear_sampler), _61, 0.0);
+        vec2 _71 = (_61 * params.metrics.zw) + vec2(-0.5, 0.5);
+        vec2 _72 = floor(_71);
+        vec2 _74 = _72 * params.metrics.xy;
+        vec2 _75 = _71 - _72;
+        vec4 _79 = textureGather(sampler2D(tex0, linear_sampler), _74, 1);
+        float _80 = _79.z;
+        float _81 = _79.y;
+        float _84 = _67.y;
+        vec4 _359;
+        if (((abs(_80 - _81) + abs(_84 - _81)) + abs(_84 - _80)) > 0.0313725508749485015869140625)
+        {
+            vec2 _97 = _74;
+            _97.x = _74.x + params.metrics.x;
+            vec4 _103 = textureGather(sampler2D(tex0, linear_sampler), _97 + vec2(params.metrics.x, 0.0), 1);
+            vec4 _111 = textureGather(sampler2D(tex0, linear_sampler), _97 + vec2(0.0, -params.metrics.y), 1);
+            vec4 _117 = textureGather(sampler2D(tex0, linear_sampler), _97 + vec2(0.0, params.metrics.y), 1);
+            float _124 = (((_81 + _80) + _103.x) + _103.w) * 0.25;
+            vec4 _125 = vec4(_124);
+            vec4 _126 = _79 - _125;
+            vec4 _127 = _103 - _125;
+            vec4 _128 = vec4(_111.w, _111.z, _117.y, _117.x) - _125;
+            float _129 = _84 - _124;
+            float _130 = _126.x;
+            float _131 = abs(_130);
+            float _132 = _126.y;
+            float _133 = abs(_132);
+            float _135 = _126.z;
+            float _136 = abs(_135);
+            float _138 = _126.w;
+            float _139 = abs(_138);
+            float _141 = _127.x;
+            float _142 = abs(_141);
+            float _143 = _127.y;
+            float _144 = abs(_143);
+            float _146 = _127.z;
+            float _147 = abs(_146);
+            float _149 = _127.w;
+            float _150 = abs(_149);
+            float _153 = _128.x;
+            float _154 = abs(_153);
+            float _155 = _128.y;
+            float _156 = abs(_155);
+            float _158 = _128.z;
+            float _159 = abs(_158);
+            float _161 = _128.w;
+            float _162 = abs(_161);
+            float _164 = ((((_131 + _133) + _136) + _139) + (((_142 + _144) + _147) + _150)) + (((_154 + _156) + _159) + _162);
+            float _166 = 102.8571319580078125 / (_164 * _164);
+            float _167 = _75.x;
+            float _168 = _75.y;
+            float _169 = _168 + 1.0;
+            float _170 = _167 * _167;
+            float _171 = _169 * _169;
+            float _176 = ((_170 + _171) * 0.5) + clamp(_154 * _166, 0.0, 1.0);
+            float _177 = _176 - 4.0;
+            float _181 = ((_176 * _177) - _177) * (_177 * _177);
+            float _184 = _167 - 1.0;
+            float _185 = _184 * _184;
+            float _190 = ((_185 + _171) * 0.5) + clamp(_156 * _166, 0.0, 1.0);
+            float _191 = _190 - 4.0;
+            float _195 = ((_190 * _191) - _191) * (_191 * _191);
+            float _199 = _168 - 2.0;
+            float _200 = _199 * _199;
+            float _205 = ((_185 + _200) * 0.5) + clamp(_159 * _166, 0.0, 1.0);
+            float _206 = _205 - 4.0;
+            float _210 = ((_205 * _206) - _206) * (_206 * _206);
+            float _218 = ((_170 + _200) * 0.5) + clamp(_162 * _166, 0.0, 1.0);
+            float _219 = _218 - 4.0;
+            float _223 = ((_218 * _219) - _219) * (_219 * _219);
+            float _227 = _167 + 1.0;
+            float _228 = _168 - 1.0;
+            float _229 = _227 * _227;
+            float _230 = _228 * _228;
+            float _235 = ((_229 + _230) * 0.5) + clamp(_131 * _166, 0.0, 1.0);
+            float _236 = _235 - 4.0;
+            float _240 = ((_235 * _236) - _236) * (_236 * _236);
+            float _248 = ((_170 + _230) * 0.5) + clamp(_133 * _166, 0.0, 1.0);
+            float _249 = _248 - 4.0;
+            float _253 = ((_248 * _249) - _249) * (_249 * _249);
+            float _257 = _168 * _168;
+            float _262 = ((_170 + _257) * 0.5) + clamp(_136 * _166, 0.0, 1.0);
+            float _263 = _262 - 4.0;
+            float _267 = ((_262 * _263) - _263) * (_263 * _263);
+            float _275 = ((_229 + _257) * 0.5) + clamp(_139 * _166, 0.0, 1.0);
+            float _276 = _275 - 4.0;
+            float _280 = ((_275 * _276) - _276) * (_276 * _276);
+            float _288 = ((_185 + _230) * 0.5) + clamp(_142 * _166, 0.0, 1.0);
+            float _289 = _288 - 4.0;
+            float _293 = ((_288 * _289) - _289) * (_289 * _289);
+            float _297 = _167 - 2.0;
+            float _298 = _297 * _297;
+            float _303 = ((_298 + _230) * 0.5) + clamp(_144 * _166, 0.0, 1.0);
+            float _304 = _303 - 4.0;
+            float _308 = ((_303 * _304) - _304) * (_304 * _304);
+            float _316 = ((_298 + _257) * 0.5) + clamp(_147 * _166, 0.0, 1.0);
+            float _317 = _316 - 4.0;
+            float _321 = ((_316 * _317) - _317) * (_317 * _317);
+            float _329 = ((_185 + _257) * 0.5) + clamp(_150 * _166, 0.0, 1.0);
+            float _330 = _329 - 4.0;
+            float _334 = ((_329 * _330) - _330) * (_330 * _330);
+            vec2 _337 = ((((((((((vec2(_181, _181 * _153) + vec2(_195, _195 * _155)) + vec2(_210, _210 * _158)) + vec2(_223, _223 * _161)) + vec2(_240, _240 * _130)) + vec2(_253, _253 * _132)) + vec2(_267, _267 * _135)) + vec2(_280, _280 * _138)) + vec2(_293, _293 * _141)) + vec2(_308, _308 * _143)) + vec2(_321, _321 * _146)) + vec2(_334, _334 * _149);
+            float _349 = clamp(2.0 * (_337.y / _337.x), spvNMin(spvNMin(_132, _135), spvNMin(_141, _149)), spvNMax(spvNMax(_132, _135), spvNMax(_141, _149))) - _129;
+            _359 = vec4(clamp(_67.x + _349, 0.0, 1.0), clamp(_84 + _349, 0.0, 1.0), clamp(_67.z + _349, 0.0, 1.0), _129);
+        }
+        else
+        {
+            _359 = vec4(_67.x, _67.y, _67.z, vec4(0.0, 0.0, 0.0, 1.0).w);
+        }
+        vec4 _360 = _359;
+        _360.w = 1.0;
+        imageStore(output0, ivec2(gl_GlobalInvocationID.xy), _360);
+        break;
+    } while(false);
+}

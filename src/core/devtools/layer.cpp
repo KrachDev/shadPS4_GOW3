@@ -95,25 +95,30 @@ void L::DrawMenuBar() {
                 SliderFloat("Gamma", &pp_settings.gamma, 0.1f, 2.0f);
                 ImGui::EndMenu();
             }
-            if (BeginMenu("FSR")) {
-                auto& fsr = presenter->GetFsrSettingsRef();
-                Checkbox("FSR Enabled", &fsr.enable);
-                BeginDisabled(!fsr.enable);
-                {
-                    Checkbox("RCAS", &fsr.use_rcas);
-                    BeginDisabled(!fsr.use_rcas);
-                    {
-                        SliderFloat("RCAS Attenuation", &fsr.rcas_attenuation, 0.0, 3.0);
-                    }
-                    EndDisabled();
+            if (BeginMenu("Image Processing")) {
+                auto options = presenter->GetPostFxOptions();
+                constexpr const char* aa[] = {"None", "FSR1", "GSR1", "PSMAA", "CMAA2", "TDAA"};
+                constexpr const char* sharp[] = {"None", "RCAS"};
+                bool changed = Combo("Anti-aliasing", &options.anti_aliasing, aa, 6);
+                changed |= Combo("Upscaler / Downscaler", &options.upscaler, aa, 3);
+                changed |= Combo("Sharpening", &options.sharpening, sharp, 2);
+                float attenuation = options.attenuation / 1000.f;
+                BeginDisabled(options.sharpening == 0);
+                if (SliderFloat("RCAS Attenuation", &attenuation, 0.0, 3.0)) {
+                    options.attenuation = static_cast<int>(attenuation * 1000);
+                    changed = true;
                 }
                 EndDisabled();
+                if (changed) {
+                    presenter->SetPostFxOptions(options.upscaler, options.anti_aliasing,
+                                               options.sharpening, options.attenuation);
+                }
 
                 if (Button("Save")) {
-                    EmulatorSettings.SetFsrEnabled(fsr.enable);
-                    EmulatorSettings.SetRcasEnabled(fsr.use_rcas);
-                    EmulatorSettings.SetRcasAttenuation(
-                        static_cast<int>(fsr.rcas_attenuation * 1000));
+                    EmulatorSettings.SetUpscaler(options.upscaler);
+                    EmulatorSettings.SetAntiAliasing(options.anti_aliasing);
+                    EmulatorSettings.SetSharpening(options.sharpening);
+                    EmulatorSettings.SetRcasAttenuation(options.attenuation);
                     EmulatorSettings.Save();
                     CloseCurrentPopup();
                 }

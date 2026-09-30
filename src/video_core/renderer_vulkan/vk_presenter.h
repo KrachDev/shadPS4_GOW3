@@ -12,7 +12,7 @@
 
 #include "core/libraries/videoout/buffer.h"
 #include "imgui/imgui_texture.h"
-#include "video_core/renderer_vulkan/host_passes/fsr_pass.h"
+#include "video_core/renderer_vulkan/host_passes/postfx_pass.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
 #include "video_core/renderer_vulkan/vk_display_pacer.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -72,9 +72,8 @@ public:
         return pp_settings;
     }
 
-    HostPasses::FsrPass::Settings& GetFsrSettingsRef() {
-        return fsr_settings;
-    }
+    void SetPostFxOptions(int upscaler, int aa, int sharpening, int attenuation);
+    HostPasses::PostFxPass::Settings GetPostFxOptions() const;
 
     Frontend::WindowSDL& GetWindow() const {
         return window;
@@ -194,8 +193,8 @@ private:
 
     Frontend::WindowSDL& window;
     Instance instance;
-    HostPasses::FsrPass fsr_pass;
-    HostPasses::FsrPass::Settings fsr_settings{};
+    HostPasses::PostFxPass postfx_pass;
+    std::atomic<u32> postfx_options{};
     HostPasses::PostProcessingPass::Settings pp_settings{};
     HostPasses::PostProcessingPass pp_pass;
     AmdGpu::Liverpool* liverpool;

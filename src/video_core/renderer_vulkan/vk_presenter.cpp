@@ -559,12 +559,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
         draw_scheduler.SetLatencyPresentId(present_id);
     }
 
-    fsr_settings.enable = EmulatorSettings.IsFsrEnabled();
-    fsr_settings.use_rcas = EmulatorSettings.IsRcasEnabled();
-    fsr_settings.rcas_attenuation =
-        static_cast<float>(EmulatorSettings.GetRcasAttenuation() / 1000.f);
-
-    fsr_pass.Create(device, instance.GetAllocator(), num_images);
+    SetPostFxOptions(EmulatorSettings.GetUpscaler(), EmulatorSettings.GetAntiAliasing(),
+                     EmulatorSettings.GetSharpening(), EmulatorSettings.GetRcasAttenuation());
+    postfx_pass.Create(instance);
     pp_pass.Create(device, swapchain.GetSurfaceFormat().format);
 
     ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
@@ -1197,9 +1194,11 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     // Continue with host-side passes that draw the displayed (scaled) frame.
     image.Transit(vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eShaderRead, {});
 
-    image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
-                                 fsr_settings, frame->is_hdr);
-    pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
+    const bool input_linear = view_info.format == vk::Format::eR8G8B8A8Srgb ||
+                              view_info.format == vk::Format::eB8G8R8A8Srgb;
+    const auto filtered = postfx_pass.Render(draw_scheduler, image_view, image_size,
+                                            {frame->width, frame->height}, GetPostFxOptions(), input_linear);
+    pp_pass.Render(cmdbuf, filtered.view, filtered.size, *frame, pp_settings);
 
     DebugState.game_resolution = {image_size.width, image_size.height};
     DebugState.output_resolution = {frame->width, frame->height};
@@ -1233,6 +1232,20 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     }
     EndGuestFrame();
     return frame;
+}
+
+void Presenter::SetPostFxOptions(int upscaler, int aa, int sharpening, int attenuation) {
+    const u32 options = static_cast<u32>(std::clamp(upscaler, 0, 2)) |
+                        (static_cast<u32>(std::clamp(aa, 0, 5)) << 2) |
+                        (static_cast<u32>(std::clamp(sharpening, 0, 1)) << 5) |
+                        (static_cast<u32>(std::clamp(attenuation, 0, 3000)) << 6);
+    postfx_options.store(options, std::memory_order_release);
+}
+
+HostPasses::PostFxPass::Settings Presenter::GetPostFxOptions() const {
+    const u32 options = postfx_options.load(std::memory_order_acquire);
+    return {static_cast<int>(options & 3), static_cast<int>((options >> 2) & 7),
+            static_cast<int>((options >> 5) & 1), static_cast<int>(options >> 6)};
 }
 
 Frame* Presenter::PrepareBlankFrame(bool present_thread) {

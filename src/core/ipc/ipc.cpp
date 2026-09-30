@@ -156,21 +156,34 @@ void IPC::InputLoop() {
             bool is_game_specific = next_u64() != 0;
             EmulatorSettings.SetVolumeSlider(value, is_game_specific);
             Libraries::AudioOut::AdjustVol();
+        } else if (cmd == "SET_POSTFX") {
+            const int upscaler = static_cast<int>(next_u64());
+            const int aa = static_cast<int>(next_u64());
+            const int sharpening = static_cast<int>(next_u64());
+            const int attenuation = static_cast<int>(next_u64());
+            if (presenter) {
+                presenter->SetPostFxOptions(upscaler, aa, sharpening, attenuation);
+            }
         } else if (cmd == "SET_FSR") {
             bool use_fsr = next_u64() != 0;
             if (presenter) {
-                presenter->GetFsrSettingsRef().enable = use_fsr;
+                auto options = presenter->GetPostFxOptions();
+                presenter->SetPostFxOptions(use_fsr ? 1 : 0, options.anti_aliasing,
+                                           options.sharpening, options.attenuation);
             }
         } else if (cmd == "SET_RCAS") {
             bool use_rcas = next_u64() != 0;
             if (presenter) {
-                presenter->GetFsrSettingsRef().use_rcas = use_rcas;
+                auto options = presenter->GetPostFxOptions();
+                presenter->SetPostFxOptions(options.upscaler, options.anti_aliasing,
+                                           use_rcas ? 1 : 0, options.attenuation);
             }
         } else if (cmd == "SET_RCAS_ATTENUATION") {
             int value = static_cast<int>(next_u64());
             if (presenter) {
-                presenter->GetFsrSettingsRef().rcas_attenuation =
-                    static_cast<float>(value / 1000.0f);
+                auto options = presenter->GetPostFxOptions();
+                presenter->SetPostFxOptions(options.upscaler, options.anti_aliasing,
+                                           options.sharpening, value);
             }
         } else if (cmd == "USB_LOAD_FIGURE") {
             const auto ref = Libraries::Usbd::usb_backend->GetImplRef();

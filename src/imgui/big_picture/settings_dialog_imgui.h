@@ -136,8 +136,9 @@ private:
     int windowWidthSetting;
     int windowHeightSetting;
     bool hdrAllowedSetting;
-    bool fsrEnabledSetting;
-    bool rcasEnabledSetting;
+    int upscalerSetting;
+    int antiAliasingSetting;
+    int sharpeningSetting;
     float rcasAttenuationSetting;
 
     // Input tab
