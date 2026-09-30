@@ -845,7 +845,8 @@ int PS4_SYSV_ABI sceNetEpollWait(OrbisNetId epollid, OrbisNetEpollEvent* events,
 #else
         // Rounded up so that a timeout under a millisecond still waits.
         result = epoll_wait(epoll->epoll_fd, native_events.data(), maxevents,
-                            timeout < 0 ? timeout : (timeout + 999) / 1000);
+                            timeout < 0 ? timeout
+                                        : static_cast<int>((static_cast<s64>(timeout) + 999) / 1000));
 #endif
     }
 
