@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
-struct Constants { float4 metrics; float4 target; uint history_valid; };
+struct Constants { float4 metrics; float4 target; uint conversion; };
 [[vk::push_constant]] Constants params;
 [[vk::binding(0)]] Texture2D<float4> tex0;
 [[vk::binding(1)]] Texture2D<float4> tex1;

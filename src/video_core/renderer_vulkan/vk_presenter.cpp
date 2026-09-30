@@ -1235,8 +1235,8 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
 }
 
 void Presenter::SetPostFxOptions(int upscaler, int aa, int sharpening, int attenuation) {
-    const u32 options = static_cast<u32>(std::clamp(upscaler, 0, 2)) |
-                        (static_cast<u32>(std::clamp(aa, 0, 5)) << 2) |
+    const u32 options = static_cast<u32>(upscaler == 1) |
+                        (static_cast<u32>(aa == 1 || aa == 3 || aa == 4 ? aa : 0) << 2) |
                         (static_cast<u32>(std::clamp(sharpening, 0, 1)) << 5) |
                         (static_cast<u32>(std::clamp(attenuation, 0, 3000)) << 6);
     postfx_options.store(options, std::memory_order_release);

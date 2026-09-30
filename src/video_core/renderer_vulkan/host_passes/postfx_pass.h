@@ -39,8 +39,8 @@ public:
 
 private:
     enum class Program : u32 {
-        Copy, Easu, Rcas, Gsr, Psmaa0, Psmaa1, Psmaa2, Psmaa3, Psmaa4, Psmaa5, Psmaa6,
-        Temporal, Detail, Edges, DispatchArgs, Candidates, Apply, Count
+        Copy, Easu, Rcas, Psmaa0, Psmaa1, Psmaa2, Psmaa3, Psmaa4, Psmaa5, Psmaa6,
+        Edges, DispatchArgs, Candidates, Apply, Count
     };
     struct Surface {
         VideoCore::UniqueImage image;
@@ -57,7 +57,7 @@ private:
     struct Constants {
         std::array<float, 4> metrics;
         std::array<float, 4> target;
-        u32 history_valid{};
+        u32 conversion{};
     };
 
     Kernel& GetKernel(Program program);
@@ -73,10 +73,8 @@ private:
     Surface& Spatial(Scheduler& scheduler, Program program, vk::ImageView input,
                      vk::Extent2D size, vk::Extent2D output_size, int attenuation = 0);
     Surface& Psmaa(Scheduler& scheduler, vk::ImageView input, vk::Extent2D size);
-    Surface& Tdaa(Scheduler& scheduler, vk::ImageView input, vk::Extent2D size);
     Surface& Cmaa(Scheduler& scheduler, vk::ImageView input, vk::Extent2D size);
     void UploadLookup(Scheduler& scheduler);
-    void ResetHistory(Scheduler& scheduler);
 
     vk::Device device{};
     VmaAllocator allocator{};
@@ -88,11 +86,6 @@ private:
     std::vector<std::unique_ptr<Surface>> images;
     u32 next_image{};
     std::array<std::unique_ptr<Surface>, 2> lookup;
-    std::array<std::unique_ptr<Surface>, 4> history;
-    u32 history_index{};
-    bool history_valid{};
-    bool was_linear{};
-    Settings previous_settings{};
     std::array<std::unique_ptr<VideoCore::UniqueBuffer>, 5> cmaa_buffers;
     vk::Extent2D cmaa_size{};
 };

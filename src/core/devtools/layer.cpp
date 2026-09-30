@@ -97,10 +97,13 @@ void L::DrawMenuBar() {
             }
             if (BeginMenu("Image Processing")) {
                 auto options = presenter->GetPostFxOptions();
-                constexpr const char* aa[] = {"None", "FSR1", "GSR1", "PSMAA", "CMAA2", "TDAA"};
+                constexpr const char* aa[] = {"None", "FSR1", "PSMAA", "CMAA2"};
                 constexpr const char* sharp[] = {"None", "RCAS"};
-                bool changed = Combo("Anti-aliasing", &options.anti_aliasing, aa, 6);
-                changed |= Combo("Upscaler / Downscaler", &options.upscaler, aa, 3);
+                int aa_index = options.anti_aliasing > 1 ? options.anti_aliasing - 1
+                                                        : options.anti_aliasing;
+                bool changed = Combo("Anti-aliasing", &aa_index, aa, 4);
+                options.anti_aliasing = aa_index > 1 ? aa_index + 1 : aa_index;
+                changed |= Combo("Upscaler / Downscaler", &options.upscaler, aa, 2);
                 changed |= Combo("Sharpening", &options.sharpening, sharp, 2);
                 float attenuation = options.attenuation / 1000.f;
                 BeginDisabled(options.sharpening == 0);

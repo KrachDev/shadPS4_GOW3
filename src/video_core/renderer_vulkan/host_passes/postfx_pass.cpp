@@ -10,7 +10,6 @@
 #include "video_core/host_shaders/cmaa2_2_comp.h"
 #include "video_core/host_shaders/cmaa2_3_comp.h"
 #include "video_core/host_shaders/fsr_comp.h"
-#include "video_core/host_shaders/gsr1_comp.h"
 #include "video_core/host_shaders/postfx_copy_comp.h"
 #include "video_core/host_shaders/psmaa0_comp.h"
 #include "video_core/host_shaders/psmaa1_comp.h"
@@ -19,8 +18,6 @@
 #include "video_core/host_shaders/psmaa4_comp.h"
 #include "video_core/host_shaders/psmaa5_comp.h"
 #include "video_core/host_shaders/psmaa6_comp.h"
-#include "video_core/host_shaders/tdaa0_comp.h"
-#include "video_core/host_shaders/tdaa1_comp.h"
 #include "video_core/host_shaders/postfx/areatex.h"
 #include "video_core/host_shaders/postfx/searchtex.h"
 #include "video_core/renderer_vulkan/host_passes/postfx_pass.h"
@@ -40,10 +37,10 @@ namespace {
 constexpr vk::ImageSubresourceRange ColorRange{vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
 constexpr std::array Sources{
     HostShaders::POSTFX_COPY_COMP, HostShaders::FSR_COMP, HostShaders::FSR_COMP,
-    HostShaders::GSR1_COMP, HostShaders::PSMAA0_COMP, HostShaders::PSMAA1_COMP,
+    HostShaders::PSMAA0_COMP, HostShaders::PSMAA1_COMP,
     HostShaders::PSMAA2_COMP, HostShaders::PSMAA3_COMP, HostShaders::PSMAA4_COMP,
     HostShaders::PSMAA5_COMP, HostShaders::PSMAA6_COMP,
-    HostShaders::TDAA0_COMP, HostShaders::TDAA1_COMP, HostShaders::CMAA2_0_COMP,
+    HostShaders::CMAA2_0_COMP,
     HostShaders::CMAA2_1_COMP, HostShaders::CMAA2_2_COMP, HostShaders::CMAA2_3_COMP,
 };
 
@@ -260,8 +257,8 @@ PostFxPass::Surface& PostFxPass::Spatial(Scheduler& scheduler, Program program, 
         FsrRcasCon(constants[0].data(), static_cast<float>(attenuation) / 1000.f);
     }
     Dispatch(scheduler.CommandBuffer(), program, std::array{input}, std::array{&output}, size,
-             program == Program::Gsr || program == Program::Copy ? nullptr : constants.data(),
-             program == Program::Gsr || program == Program::Copy ? 0 : sizeof(constants));
+             program == Program::Copy ? nullptr : constants.data(),
+             program == Program::Copy ? 0 : sizeof(constants));
     return output;
 }
 
@@ -321,38 +318,6 @@ PostFxPass::Surface& PostFxPass::Psmaa(Scheduler& scheduler, vk::ImageView input
     Dispatch(cmd, Program::Psmaa6, std::array{blended.view.get(), deltas.view.get(), weights.view.get(), luma.view.get()},
              std::array{&smoothed}, size);
     return smoothed;
-}
-
-void PostFxPass::ResetHistory(Scheduler& scheduler) {
-    for (auto& image : history) {
-        if (image) {
-            scheduler.DeferOperation([old = std::move(image)] {});
-        }
-    }
-    history_valid = false;
-    history_index = 0;
-}
-
-PostFxPass::Surface& PostFxPass::Tdaa(Scheduler& scheduler, vk::ImageView input, vk::Extent2D size) {
-    if (!history[0] || history[0]->size != size) {
-        ResetHistory(scheduler);
-        for (auto& image : history) {
-            image = CreateSurface(size, vk::Format::eR16G16B16A16Sfloat);
-        }
-    }
-    const auto cmd = scheduler.CommandBuffer();
-    const u32 previous = history_index * 2;
-    const u32 next = (history_index ^ 1) * 2;
-    Transition(cmd, *history[previous], vk::ImageLayout::eShaderReadOnlyOptimal);
-    Transition(cmd, *history[previous + 1], vk::ImageLayout::eShaderReadOnlyOptimal);
-    Dispatch(cmd, Program::Temporal, std::array{input, history[previous]->view.get(), history[previous + 1]->view.get()},
-             std::array{history[next].get(), history[next + 1].get()}, size, nullptr, 0, history_valid);
-    auto& output = GetSurface(scheduler, size);
-    Dispatch(cmd, Program::Detail, std::array{history[next]->view.get(), history[next + 1]->view.get()},
-             std::array{&output}, size);
-    history_index ^= 1;
-    history_valid = true;
-    return output;
 }
 
 PostFxPass::Surface& PostFxPass::Cmaa(Scheduler& scheduler, vk::ImageView input, vk::Extent2D size) {
@@ -426,11 +391,6 @@ PostFxPass::Output PostFxPass::Render(Scheduler& scheduler, vk::ImageView input,
                                     vk::Extent2D input_size, vk::Extent2D output_size,
                                     Settings settings, bool input_linear) {
     next_image = 0;
-    if (settings.anti_aliasing != previous_settings.anti_aliasing || input_linear != was_linear) {
-        ResetHistory(scheduler);
-    }
-    previous_settings = settings;
-    was_linear = input_linear;
     const auto trim = [&] {
         while (images.size() > next_image) {
             scheduler.DeferOperation([old = std::move(images.back())] {});
@@ -443,7 +403,7 @@ PostFxPass::Output PostFxPass::Render(Scheduler& scheduler, vk::ImageView input,
             cmaa_size = {};
         }
     };
-    const bool needs_scaling = settings.upscaler != 0 && input_size != output_size;
+    const bool needs_scaling = settings.upscaler == 1 && input_size != output_size;
     DebugState.is_using_fsr = settings.anti_aliasing == 1 || (settings.upscaler == 1 && needs_scaling);
     if (!needs_scaling && settings.anti_aliasing == 0 && settings.sharpening == 0) {
         trim();
@@ -454,19 +414,15 @@ PostFxPass::Output PostFxPass::Render(Scheduler& scheduler, vk::ImageView input,
     if (input_linear) {
         view = Copy(scheduler, view, size, 1).view.get();
     }
-    if (settings.anti_aliasing == 1 || settings.anti_aliasing == 2) {
-        view = Spatial(scheduler, settings.anti_aliasing == 1 ? Program::Easu : Program::Gsr,
-                       view, size, size).view.get();
+    if (settings.anti_aliasing == 1) {
+        view = Spatial(scheduler, Program::Easu, view, size, size).view.get();
     } else if (settings.anti_aliasing == 3) {
         view = Psmaa(scheduler, view, size).view.get();
     } else if (settings.anti_aliasing == 4) {
         view = Cmaa(scheduler, view, size).view.get();
-    } else if (settings.anti_aliasing == 5) {
-        view = Tdaa(scheduler, view, size).view.get();
     }
-    if (settings.upscaler != 0 && size != output_size) {
-        view = Spatial(scheduler, settings.upscaler == 1 ? Program::Easu : Program::Gsr,
-                       view, size, output_size).view.get();
+    if (needs_scaling) {
+        view = Spatial(scheduler, Program::Easu, view, size, output_size).view.get();
         size = output_size;
     } else if (settings.sharpening == 1 && size != output_size) {
         view = Spatial(scheduler, Program::Copy, view, size, output_size).view.get();

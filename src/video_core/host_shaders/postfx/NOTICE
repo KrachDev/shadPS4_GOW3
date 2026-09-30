@@ -1,10 +1,5 @@
 Post-processing sources and modifications (2026 shadPS4 Emulator Project)
 
-GSR1: https://github.com/SnapdragonGameStudios/snapdragon-gsr
-Revision d926f074bcb9d714e179f1ce0fcb9ee2eeb5074e, sgsr/v1/include/hlsl.
-Copyright 2023 Qualcomm Innovation Center, Inc. BSD-3-Clause; see GSR1-LICENSE.
-The mobile spatial filter is wrapped as a compute shader with Vulkan bindings.
-
 CMAA2: https://github.com/GameTechDev/CMAA2
 Revision 071c6b0857559f4e36f614362e6d2aab1b61938a, Projects/CMAA2/CMAA2/CMAA2.hlsl.
 Copyright 2018 Intel Corporation; author Filip Strugar.
@@ -12,15 +7,6 @@ Apache-2.0; see CMAA2-LICENSE and the retained Microsoft helper notice in cmaa2.
 A dynamic Load offset is added to the coordinates for DXC. GLSL storage formats,
 bindings and zero-returning out-of-bounds loads are adapted for Vulkan. Candidate
 processing and deferred color application retain the original indirect dispatches.
-
-TDAA: https://github.com/aston89/TDAA-Temporal-Detail-Anti-Aliasing-for-ReShade
-Revision d6a64774882da83bc9839bbefc5768de5b640126.
-Copyright Aston89 (Baudelaire). GPL-3.0; see TDAA-LICENSE.
-Temporal resolve and detail/polish are wrapped as compute shaders using the
-upstream defaults. History color and state use GPU ping-pong images, replacing
-the original copy pass. The first frame initializes history from the current
-image. A combined binary containing TDAA and CMAA2 must use GPLv3, as permitted
-by the emulator's GPL-2.0-or-later licence, retaining third-party notices.
 
 PSMAA: https://github.com/RdenBlaauwen/PSMAA
 Revision 39eb74da55c0663cef22a0f1d4a746ebf33f9e10; bundled dependencies from

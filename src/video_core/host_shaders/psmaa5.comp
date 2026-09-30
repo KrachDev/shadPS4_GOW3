@@ -35,7 +35,7 @@ layout(push_constant, std430) uniform type_PushConstant_Constants
 {
     vec4 metrics;
     vec4 target;
-    uint history_valid;
+    uint conversion;
 } params;
 
 layout(set = 0, binding = 0) uniform texture2D tex0;

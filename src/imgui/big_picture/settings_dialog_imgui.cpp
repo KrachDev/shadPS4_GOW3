@@ -713,9 +713,10 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             AddSettingSliderInt("Window Width", windowWidthSetting, 0, 8000);
             AddSettingSliderInt("Window Height", windowHeightSetting, 0, 7000);
             AddSettingCheckbox("Enable HDR", hdrAllowedSetting);
-            AddSettingCombo("Anti-aliasing", antiAliasingSetting,
-                            {"None", "FSR1", "GSR1", "PSMAA", "CMAA2", "TDAA"});
-            AddSettingCombo("Upscaler / Downscaler", upscalerSetting, {"None", "FSR1", "GSR1"});
+            int aa_index = antiAliasingSetting > 1 ? antiAliasingSetting - 1 : antiAliasingSetting;
+            AddSettingCombo("Anti-aliasing", aa_index, {"None", "FSR1", "PSMAA", "CMAA2"});
+            antiAliasingSetting = aa_index > 1 ? aa_index + 1 : aa_index;
+            AddSettingCombo("Upscaler / Downscaler", upscalerSetting, {"None", "FSR1"});
             AddSettingCombo("Sharpening", sharpeningSetting, {"None", "RCAS"});
             if (sharpeningSetting == 1) {
                 AddSettingSliderFloat("RCAS Attenuation", rcasAttenuationSetting, 0.0f, 3.0f, 3);

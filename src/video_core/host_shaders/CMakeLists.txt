@@ -17,7 +17,6 @@ set(SHADER_FILES
     fs_tri.vert
     fsr.comp
     postfx_copy.comp
-    gsr1.comp
     psmaa0.comp
     psmaa1.comp
     psmaa2.comp
@@ -25,8 +24,6 @@ set(SHADER_FILES
     psmaa4.comp
     psmaa5.comp
     psmaa6.comp
-    tdaa0.comp
-    tdaa1.comp
     cmaa2_0.comp
     cmaa2_1.comp
     cmaa2_2.comp

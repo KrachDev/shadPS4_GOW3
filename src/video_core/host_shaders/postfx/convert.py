@@ -72,15 +72,10 @@ def main():
     parser.add_argument("--tools", type=Path, required=True,
                         help="Vulkan SDK Bin directory containing DXC, SPIRV-Cross and SPIRV-Tools")
     args = parser.parse_args()
-    convert(args.tools, "gsr1", "gsr1.hlsl", "main", [],
-            "Copyright 2023 Qualcomm Innovation Center, Inc.", "BSD-3-Clause")
     for stage in range(7):
         convert(args.tools, f"psmaa{stage}", "psmaa.hlsl", "main", [f"STAGE={stage}"],
                 "Copyright 2025 RdenBlaauwen; Jorge Jimenez et al.; NVIDIA Corporation; Derek Brush",
                 "LicenseRef-PSMAA-ThirdParty")
-    for stage in range(2):
-        convert(args.tools, f"tdaa{stage}", "tdaa.hlsl", "main", [f"STAGE={stage}"],
-                "Copyright Aston89 (Baudelaire)", "GPL-3.0-only")
     for stage, entry in enumerate(["EdgesColor2x2CS", "ComputeDispatchArgsCS",
                                    "ProcessCandidatesCS", "DeferredColorApply2x2CS"]):
         convert(args.tools, f"cmaa2_{stage}", "cmaa2.hlsl", entry,
