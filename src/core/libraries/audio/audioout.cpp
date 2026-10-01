@@ -344,8 +344,13 @@ s32 PS4_SYSV_ABI sceAudioOutOpen(UserService::OrbisUserServiceUserId user_id,
 
         // Set attributes
         port->is_restricted = is_restricted;
-        port->is_mix_to_main = is_mix_to_main || (port->type == OrbisAudioOutPort::PadSpk &&
-                                                EmulatorSettings.IsPadSpkMixToMain());
+        port->is_mix_to_main = is_mix_to_main;
+        if (port->type == OrbisAudioOutPort::PadSpk) {
+            const auto device = EmulatorSettings.GetAudioBackend() == AudioBackend::OpenAL
+                                    ? EmulatorSettings.GetOpenALPadSpkOutputDevice()
+                                    : EmulatorSettings.GetSDLPadSpkOutputDevice();
+            port->is_mix_to_main = device == "None";
+        }
 
         // Log attributes if present
         if (is_restricted) {

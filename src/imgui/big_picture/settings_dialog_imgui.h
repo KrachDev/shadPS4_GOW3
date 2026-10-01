@@ -129,7 +129,6 @@ private:
     int volumeSetting;
     bool showSplashSetting;
     int audioBackendSetting;
-    bool padSpkMixToMainSetting;
 
     // Graphics tab
     int fullscreenModeSetting;
