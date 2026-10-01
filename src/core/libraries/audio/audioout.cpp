@@ -144,6 +144,17 @@ static int AllocatePort(OrbisAudioOutPort type) {
     return -1;
 }
 
+static void ApplyVolume(PortOut& port) {
+    auto volume = port.volume;
+    if (port.type == OrbisAudioOutPort::PadSpk && port.is_mix_to_main) {
+        for (auto& channel_volume : volume) {
+            channel_volume = static_cast<s64>(channel_volume) * port.mixLevelPadSpk /
+                             ORBIS_AUDIO_OUT_MIXLEVEL_PADSPK_0DB;
+        }
+    }
+    port.impl->SetVolume(volume);
+}
+
 void AdjustVol() {
     if (lazy_init.load(std::memory_order_relaxed) == 0 && audio == nullptr) {
         return;
@@ -154,7 +165,7 @@ void AdjustVol() {
         if (auto port = port_table[i]) {
             std::unique_lock lock{port->mutex, std::try_to_lock};
             if (lock.owns_lock()) {
-                port->impl->SetVolume(port->volume);
+                ApplyVolume(*port);
             }
         }
     }
@@ -333,7 +344,8 @@ s32 PS4_SYSV_ABI sceAudioOutOpen(UserService::OrbisUserServiceUserId user_id,
 
         // Set attributes
         port->is_restricted = is_restricted;
-        port->is_mix_to_main = is_mix_to_main;
+        port->is_mix_to_main = is_mix_to_main || (port->type == OrbisAudioOutPort::PadSpk &&
+                                                EmulatorSettings.IsPadSpkMixToMain());
 
         // Log attributes if present
         if (is_restricted) {
@@ -341,6 +353,9 @@ s32 PS4_SYSV_ABI sceAudioOutOpen(UserService::OrbisUserServiceUserId user_id,
         }
         if (is_mix_to_main) {
             LOG_INFO(Lib_AudioOut, "Audio port opened with MIX_TO_MAIN attribute");
+        }
+        if (port->type == OrbisAudioOutPort::PadSpk && port->is_mix_to_main) {
+            LOG_INFO(Lib_AudioOut, "PADSPK routed to MAIN (mix level: {})", port->mixLevelPadSpk);
         }
 
         // Create backend
@@ -355,11 +370,11 @@ s32 PS4_SYSV_ABI sceAudioOutOpen(UserService::OrbisUserServiceUserId user_id,
             throw std::bad_alloc();
         }
 
+        // Set initial volume
+        ApplyVolume(*port);
+
         // Start output thread - pass shared_ptr by value to keep port alive
         port->output_thread.Run([port](std::stop_token stop) { AudioOutputThread(port, stop); });
-
-        // Set initial volume
-        port->impl->SetVolume(port->volume);
 
     } catch (const std::bad_alloc&) {
         return ORBIS_AUDIO_OUT_ERROR_OUT_OF_MEMORY;
@@ -517,9 +532,10 @@ s32 PS4_SYSV_ABI sceAudioOutGetPortState(s32 handle, OrbisAudioOutPortState* sta
         state->channel = 1;
         break;
     case OrbisAudioOutPort::PadSpk:
-        state->output = ORBIS_AUDIO_OUT_STATE_OUTPUT_CONNECTED_TERTIARY;
+        state->output = port->is_mix_to_main ? ORBIS_AUDIO_OUT_STATE_OUTPUT_CONNECTED_PRIMARY
+                                           : ORBIS_AUDIO_OUT_STATE_OUTPUT_CONNECTED_TERTIARY;
         state->channel = 1;
-        state->volume = 127; // max
+        state->volume = port->is_mix_to_main ? -1 : 127;
         break;
     case OrbisAudioOutPort::Aux:
         state->output = ORBIS_AUDIO_OUT_STATE_OUTPUT_CONNECTED_EXTERNAL;
@@ -778,13 +794,13 @@ s32 PS4_SYSV_ABI sceAudioOutSetVolume(s32 handle, s32 flag, s32* vol) {
     if (flag & ORBIS_AUDIO_VOLUME_FLAG_RE_CH)
         port->volume[7] = *vol;
 
-    port->impl->SetVolume(port->volume);
+    ApplyVolume(*port);
 
     return ORBIS_OK;
 }
 
 s32 PS4_SYSV_ABI sceAudioOutSetMixLevelPadSpk(s32 handle, s32 mixLevel) {
-    LOG_INFO(Lib_AudioOut, "(STUBBED) called");
+    LOG_DEBUG(Lib_AudioOut, "called, handle={}, mix_level={}", handle, mixLevel);
     if (lazy_init.load(std::memory_order_relaxed) == 0 || audio == nullptr) {
         LOG_ERROR(Lib_AudioOut, "audio is not init");
         return ORBIS_AUDIO_OUT_ERROR_NOT_INIT;
@@ -801,7 +817,7 @@ s32 PS4_SYSV_ABI sceAudioOutSetMixLevelPadSpk(s32 handle, s32 mixLevel) {
         return ORBIS_AUDIO_OUT_ERROR_INVALID_PORT_TYPE;
     }
 
-    if (mixLevel > ORBIS_AUDIO_OUT_VOLUME_0DB) {
+    if (mixLevel < 0 || mixLevel > ORBIS_AUDIO_OUT_MIXLEVEL_PADSPK_0DB) {
         LOG_ERROR(Lib_AudioOut, "Invalid mix level");
         return ORBIS_AUDIO_OUT_ERROR_INVALID_MIXLEVEL;
     }
@@ -819,7 +835,7 @@ s32 PS4_SYSV_ABI sceAudioOutSetMixLevelPadSpk(s32 handle, s32 mixLevel) {
 
     std::unique_lock lock{port->mutex};
     port->mixLevelPadSpk = mixLevel;
-    // TODO: Apply mix level to backend
+    ApplyVolume(*port);
 
     return ORBIS_OK;
 }

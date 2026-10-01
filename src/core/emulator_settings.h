@@ -372,6 +372,7 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(InputSettings, cursor_state, cursor_hide_time
 // -------------------------------
 struct AudioSettings {
     Setting<u32> audio_backend{AudioBackend::SDL};
+    Setting<bool> padspk_mix_to_main{false};
     Setting<std::string> sdl_mic_device{"Default Device"};
     Setting<std::string> sdl_main_output_device{"Default Device"};
     Setting<std::string> sdl_padSpk_output_device{"Default Device"};
@@ -384,6 +385,7 @@ struct AudioSettings {
     std::vector<OverrideItem> GetOverrideableFields() const {
         return std::vector<OverrideItem>{
             make_override<AudioSettings>("audio_backend", &AudioSettings::audio_backend),
+            make_override<AudioSettings>("padspk_mix_to_main", &AudioSettings::padspk_mix_to_main),
             make_override<AudioSettings>("sdl_mic_device", &AudioSettings::sdl_mic_device),
             make_override<AudioSettings>("sdl_main_output_device",
                                          &AudioSettings::sdl_main_output_device),
@@ -399,7 +401,7 @@ struct AudioSettings {
     }
 };
 
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AudioSettings, audio_backend, sdl_mic_device,
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(AudioSettings, audio_backend, padspk_mix_to_main, sdl_mic_device,
                                    sdl_main_output_device, sdl_padSpk_output_device,
                                    openal_mic_device, openal_main_output_device,
                                    openal_padSpk_output_device, openal_hrtf, openal_output_mode)
@@ -733,6 +735,7 @@ public:
 
     // Audio settings
     SETTING_FORWARD(m_audio, AudioBackend, audio_backend)
+    SETTING_FORWARD_BOOL(m_audio, PadSpkMixToMain, padspk_mix_to_main)
     SETTING_FORWARD(m_audio, SDLMicDevice, sdl_mic_device)
     SETTING_FORWARD(m_audio, SDLMainOutputDevice, sdl_main_output_device)
     SETTING_FORWARD(m_audio, SDLPadSpkOutputDevice, sdl_padSpk_output_device)

@@ -63,7 +63,7 @@ public:
           num_channels(port.format_info.num_channels), is_float(port.format_info.is_float),
           is_std(port.format_info.is_std), channel_layout(port.format_info.channel_layout) {
 
-        if (!Initialize(port.type)) {
+        if (!Initialize(port.GetOutputType())) {
             LOG_ERROR(Lib_AudioOut, "Failed to initialize SDL audio backend");
         }
     }

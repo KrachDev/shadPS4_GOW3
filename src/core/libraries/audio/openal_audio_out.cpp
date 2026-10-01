@@ -78,7 +78,7 @@ public:
           buffer_frames(port.buffer_frames), sample_rate(port.sample_rate),
           num_channels(port.format_info.num_channels), is_float(port.format_info.is_float),
           is_std(port.format_info.is_std), channel_layout(port.format_info.channel_layout),
-          device_registered(false), device_name(GetDeviceName(port.type)) {
+          device_registered(false), device_name(GetDeviceName(port.GetOutputType())) {
 
         if (!Initialize(port.type)) {
             LOG_ERROR(Lib_AudioOut, "Failed to initialize OpenAL audio backend");

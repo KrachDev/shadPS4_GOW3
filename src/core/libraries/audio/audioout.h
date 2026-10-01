@@ -138,6 +138,10 @@ struct PortOut {
     bool is_restricted = false;
     bool is_mix_to_main = false;
 
+    [[nodiscard]] OrbisAudioOutPort GetOutputType() const {
+        return type == OrbisAudioOutPort::PadSpk && is_mix_to_main ? OrbisAudioOutPort::Main : type;
+    }
+
     [[nodiscard]] u32 BufferSize() const {
         return buffer_frames * format_info.FrameSize();
     }
