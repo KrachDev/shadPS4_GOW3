@@ -196,7 +196,8 @@ vk::Pipeline TileManager::GetTilingPipeline(const ImageInfo& info, bool is_tiler
     }
 
     const auto& module = Vulkan::Compile(HostShaders::TILING_COMP,
-                                         vk::ShaderStageFlagBits::eCompute, device, defines);
+                                         vk::ShaderStageFlagBits::eCompute, device, defines,
+                                         instance.UsesRawAccessChains());
     const auto module_name =
         fmt::format("{}_{} {}", magic_enum::enum_name(info.tile_mode), info.num_bits,
                     from_image ? "image tiler" : is_tiler ? "tiler" : "detiler");

@@ -217,10 +217,8 @@ Id EmitContext::GetBufferSize(const u32 sharp_idx) {
     ASSERT(srt_flatbuf.buffer_type == BufferType::Flatbuf);
     const auto [id, pointer_type] = srt_flatbuf.Alias(PointerType::U32);
 
-    const auto rsrc1{
-        OpLoad(U32[1], OpAccessChain(pointer_type, id, u32_zero_value, ConstU32(sharp_idx + 1)))};
-    const auto rsrc2{
-        OpLoad(U32[1], OpAccessChain(pointer_type, id, u32_zero_value, ConstU32(sharp_idx + 2)))};
+    const auto rsrc1{EmitBufferAccess(U32[1], id, ConstU32(sharp_idx + 1), 2)};
+    const auto rsrc2{EmitBufferAccess(U32[1], id, ConstU32(sharp_idx + 2), 2)};
 
     const auto stride{OpBitFieldUExtract(U32[1], rsrc1, ConstU32(16u), ConstU32(14u))};
     const auto num_records{rsrc2};
@@ -1172,8 +1170,7 @@ Id EmitContext::DefineGetBdaPointer() {
     const auto page32{OpUConvert(U32[1], page)};
     const auto& bda_buffer{buffers[bda_pagetable_index]};
     const auto [bda_buffer_id, bda_pointer_type] = bda_buffer.Alias(PointerType::U64);
-    const auto bda_ptr{OpAccessChain(bda_pointer_type, bda_buffer_id, u32_zero_value, page32)};
-    const auto bda{OpLoad(U64, bda_ptr)};
+    const auto bda{EmitBufferAccess(U64, bda_buffer_id, page32, 3)};
 
     // Check if page is GPU cached
     const auto is_fault{OpIEqual(U1[1], bda, u64_zero_value)};
@@ -1187,11 +1184,9 @@ Id EmitContext::DefineGetBdaPointer() {
     const auto page_div32{OpShiftRightLogical(U32[1], page32, ConstU32(5U))};
     const auto page_mod32{OpBitwiseAnd(U32[1], page32, ConstU32(31U))};
     const auto page_mask{OpShiftLeftLogical(U32[1], u32_one_value, page_mod32)};
-    const auto fault_ptr{
-        OpAccessChain(fault_pointer_type, fault_buffer_id, u32_zero_value, page_div32)};
-    const auto fault_value{OpLoad(U32[1], fault_ptr)};
+    const auto fault_value{EmitBufferAccess(U32[1], fault_buffer_id, page_div32, 2)};
     const auto fault_value_masked{OpBitwiseOr(U32[1], fault_value, page_mask)};
-    OpStore(fault_ptr, fault_value_masked);
+    EmitBufferAccess(U32[1], fault_buffer_id, page_div32, 2, 1, fault_value_masked);
 
     // Return null pointer
     const auto fallback_result{u64_zero_value};
@@ -1209,6 +1204,75 @@ Id EmitContext::DefineGetBdaPointer() {
     OpReturnValue(result);
     OpFunctionEnd();
     return func;
+}
+
+Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u32 count,
+                                Id value) {
+    const bool store = Sirit::ValidId(value);
+    const Id type = count == 1 ? scalar_type : TypeVector(scalar_type, count);
+    const Id scalar_pointer = TypePointer(spv::StorageClass::StorageBuffer, scalar_type);
+    const auto scalar_access = [&] {
+        std::array<Id, 4> components{};
+        for (u32 i = 0; i < count; ++i) {
+            const Id element = i == 0 ? index : OpIAdd(U32[1], index, ConstU32(i));
+            const Id pointer =
+                profile.use_raw_access_chains
+                    ? OpRawAccessChainNV(
+                          scalar_pointer, base, Constant(U64, u64{1} << shift), element,
+                          u32_zero_value, spv::RawAccessChainOperandsMask::RobustnessPerComponentNV)
+                    : OpAccessChain(scalar_pointer, base, u32_zero_value, element);
+            if (store) {
+                const Id component =
+                    count == 1 ? value : OpCompositeExtract(scalar_type, value, i);
+                if (profile.use_raw_access_chains) {
+                    OpStore(pointer, component, spv::MemoryAccessMask::Aligned, 1u << shift);
+                } else {
+                    OpStore(pointer, component);
+                }
+            } else {
+                components[i] = profile.use_raw_access_chains
+                                    ? OpLoad(scalar_type, pointer, spv::MemoryAccessMask::Aligned,
+                                             1u << shift)
+                                    : OpLoad(scalar_type, pointer);
+            }
+        }
+        return store ? Id{} : count == 1 ? components[0]
+                                        : OpCompositeConstruct(type,
+                                                               std::span{components}.first(count));
+    };
+    if (!profile.use_raw_access_chains || count == 1) {
+        return scalar_access();
+    }
+
+    const Id vector_label = OpLabel();
+    const Id scalar_label = OpLabel();
+    const Id merge_label = OpLabel();
+    const u32 boundary = u32{1} << (32 - shift);
+    const Id low_index = OpBitwiseAnd(U32[1], index, ConstU32(boundary - 1));
+    const Id contiguous = OpULessThanEqual(U1[1], low_index, ConstU32(boundary - count));
+    OpSelectionMerge(merge_label, spv::SelectionControlMask::MaskNone);
+    OpBranchConditional(contiguous, vector_label, scalar_label);
+
+    AddLabel(vector_label);
+    const Id byte_offset = OpShiftLeftLogical(U32[1], index, ConstU32(shift));
+    const Id page = OpShiftRightLogical(U32[1], index, ConstU32(32 - shift));
+    const Id pointer = OpRawAccessChainNV(
+        TypePointer(spv::StorageClass::StorageBuffer, type), base,
+        Constant(U64, u64{1} << 32), page, byte_offset,
+        spv::RawAccessChainOperandsMask::RobustnessPerComponentNV);
+    Id vector_result{};
+    if (store) {
+        OpStore(pointer, value, spv::MemoryAccessMask::Aligned, 1u << shift);
+    } else {
+        vector_result = OpLoad(type, pointer, spv::MemoryAccessMask::Aligned, 1u << shift);
+    }
+    OpBranch(merge_label);
+
+    AddLabel(scalar_label);
+    const Id scalar_result = scalar_access();
+    OpBranch(merge_label);
+    AddLabel(merge_label);
+    return store ? Id{} : OpPhi(type, vector_result, vector_label, scalar_result, scalar_label);
 }
 
 Id EmitContext::DefineReadConst(bool dynamic) {

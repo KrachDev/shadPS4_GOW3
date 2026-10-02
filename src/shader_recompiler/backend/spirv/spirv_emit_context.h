@@ -47,6 +47,8 @@ public:
     void DefineBufferProperties();
     void DefineAmdPerVertexAttribs();
     void DefineWorkgroupIndex();
+    Id EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u32 count = 1,
+                        Id value = {});
 
     [[nodiscard]] Id DefineInput(Id type, std::optional<u32> location = std::nullopt,
                                  std::optional<spv::BuiltIn> builtin = std::nullopt) {
@@ -185,9 +187,7 @@ public:
         ASSERT(flatbuf_buffer.binding >= 0 && flatbuf_buffer.buffer_type == BufferType::Flatbuf);
         const auto [flatbuf_buffer_id, flatbuf_pointer_type] =
             flatbuf_buffer.aliases[u32(PointerType::U32)];
-        const auto ptr{
-            OpAccessChain(flatbuf_pointer_type, flatbuf_buffer_id, u32_zero_value, flatbuf_offset)};
-        return OpLoad(U32[1], ptr);
+        return EmitBufferAccess(U32[1], flatbuf_buffer_id, flatbuf_offset, 2);
     }
 
     Info& info;

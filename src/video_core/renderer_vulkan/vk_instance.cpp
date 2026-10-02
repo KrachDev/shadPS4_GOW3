@@ -9,6 +9,7 @@
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/types.h"
+#include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -220,7 +221,8 @@ bool Instance::CreateDevice() {
                           vk::PhysicalDevicePresentId2FeaturesKHR,
                           vk::PhysicalDevicePresentWait2FeaturesKHR,
                           vk::PhysicalDevicePresentIdFeaturesKHR,
-                          vk::PhysicalDevicePresentWaitFeaturesKHR>();
+                          vk::PhysicalDevicePresentWaitFeaturesKHR,
+                          vk::PhysicalDeviceRawAccessChainsFeaturesNV>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -274,6 +276,12 @@ bool Instance::CreateDevice() {
                "Required Vulkan feature unavailable: nullDescriptor");
 
     // Optional
+    nv_raw_access_chains =
+        EmulatorSettings.IsNvRawAccessChainsEnabled() && features.shaderInt64 &&
+        feature_chain.get<vk::PhysicalDeviceRawAccessChainsFeaturesNV>().shaderRawAccessChains &&
+        add_extension(VK_NV_RAW_ACCESS_CHAINS_EXTENSION_NAME);
+    LOG_INFO(Render_Vulkan, "NVIDIA raw access chains: requested={}, active={}",
+             EmulatorSettings.IsNvRawAccessChainsEnabled(), nv_raw_access_chains);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
     attachment_feedback_loop = add_extension(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
     if (attachment_feedback_loop) {
@@ -514,6 +522,9 @@ bool Instance::CreateDevice() {
             .maintenance4 = vk13_features.maintenance4,
         },
         // Extensions
+        vk::PhysicalDeviceRawAccessChainsFeaturesNV{
+            .shaderRawAccessChains = nv_raw_access_chains,
+        },
         vk::PhysicalDeviceCustomBorderColorFeaturesEXT{
             .customBorderColors = true,
             .customBorderColorWithoutFormat = true,
@@ -600,6 +611,9 @@ bool Instance::CreateDevice() {
 
     if (!custom_border_color) {
         device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
+    }
+    if (!nv_raw_access_chains) {
+        device_chain.unlink<vk::PhysicalDeviceRawAccessChainsFeaturesNV>();
     }
     if (!dynamic_state_3) {
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT>();

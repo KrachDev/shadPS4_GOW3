@@ -161,6 +161,7 @@ private:
     int readbacksModeSetting;
     bool readbackLinearImagesSetting;
     bool directMemoryAccessSetting;
+    bool nvRawAccessChainsSetting;
     // Windows static guest red-zone protection
     int windowsGuestRedZoneProtectionModeSetting;
     bool devkitConsoleSetting;

@@ -14,6 +14,7 @@
 #include "common/path_util.h"
 #include "common/sha1.h"
 #include "core/emulator_settings.h"
+#include "shader_recompiler/backend/spirv/raw_access_chains.h"
 #include "video_core/host_shader_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
@@ -21,7 +22,7 @@ namespace Vulkan {
 
 namespace {
 // Increment when compiler options or resources change without a glslang version change.
-constexpr u32 HostShaderCompilerRevision = 1;
+constexpr u32 HostShaderCompilerRevision = 2;
 
 constexpr TBuiltInResource DefaultTBuiltInResource = {
     .maxLights = 32,
@@ -224,7 +225,11 @@ Storage::HostShaderCache& GetHostShaderCache() {
 } // Anonymous namespace
 
 vk::ShaderModule Compile(const HostShaders::ShaderSource& source, vk::ShaderStageFlagBits stage,
-                         vk::Device device, std::vector<std::string> defines) {
+                         vk::Device device, std::vector<std::string> defines,
+                         bool use_raw_access_chains) {
+    if (use_raw_access_chains) {
+        defines.emplace_back("SHAD_NV_RAW_ACCESS_CHAINS=1");
+    }
     const auto generation = GetGeneration(source, stage);
     const auto permutation = GetPermutation(defines);
     if (EmulatorSettings.IsPipelineCacheEnabled()) {
@@ -316,6 +321,9 @@ vk::ShaderModule Compile(const HostShaders::ShaderSource& source, vk::ShaderStag
     options.optimizeSize = true;
 
     glslang::GlslangToSpv(*intermediate, out_code, &logger, &options);
+    if (use_raw_access_chains) {
+        Shader::Backend::SPIRV::ConvertRawAccessChains(out_code);
+    }
 
     const std::string spv_messages = logger.getAllMessages();
     if (!spv_messages.empty()) {

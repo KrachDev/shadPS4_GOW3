@@ -92,7 +92,7 @@ struct ShaderCompileResult {
 namespace {
 
 constexpr std::array<u8, 8> NativePipelineCacheMagic{'S', 'H', 'A', 'D', 'V', 'K', 'P', 'C'};
-constexpr u32 NativePipelineCacheVersion = 1;
+constexpr u32 NativePipelineCacheVersion = 2;
 constexpr u64 MaxNativePipelineCacheSize = 512ULL * 1024 * 1024;
 
 struct NativePipelineCacheHeader {
@@ -1662,6 +1662,7 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
+        .use_raw_access_chains = instance_.UsesRawAccessChains(),
     };
     const auto initial_data = LoadNativePipelineCache();
     const vk::PipelineCacheCreateInfo cache_info{

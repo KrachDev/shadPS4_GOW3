@@ -15,7 +15,8 @@ namespace Vulkan {
 
 [[nodiscard]] vk::ShaderModule Compile(const HostShaders::ShaderSource& source,
                                        vk::ShaderStageFlagBits stage, vk::Device device,
-                                       std::vector<std::string> defines = {});
+                                       std::vector<std::string> defines = {},
+                                       bool use_raw_access_chains = false);
 
 [[nodiscard]] vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device);
 

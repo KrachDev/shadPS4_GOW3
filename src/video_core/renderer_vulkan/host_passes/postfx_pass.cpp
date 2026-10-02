@@ -64,6 +64,7 @@ void ComputeBarrier(const CommandRecorder& cmd) {
 
 void PostFxPass::Create(const Instance& instance) {
     device = instance.GetDevice();
+    use_raw_access_chains = instance.UsesRawAccessChains();
     allocator = instance.GetAllocator();
     const bool extended = instance.GetPhysicalDevice().getFeatures().shaderStorageImageExtendedFormats;
     const auto filtered = vk::FormatFeatureFlagBits2::eSampledImage |
@@ -128,7 +129,7 @@ PostFxPass::Kernel& PostFxPass::GetKernel(Program program) {
         defines.push_back(program == Program::Easu ? "SAMPLE_EASU=1" : "SAMPLE_RCAS=1");
     }
     const auto module = Compile(Sources[static_cast<u32>(program)], vk::ShaderStageFlagBits::eCompute,
-                                device, defines);
+                                device, defines, use_raw_access_chains);
     ASSERT(module);
     kernel.pipeline = Check<"create postfx pipeline">(device.createComputePipelineUnique({}, {
         .stage{.stage = vk::ShaderStageFlagBits::eCompute, .module = module, .pName = "main"},

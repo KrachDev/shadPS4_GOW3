@@ -997,6 +997,8 @@ set(SHADER_RECOMPILER src/shader_recompiler/profile.h
                       src/shader_recompiler/backend/spirv/emit_spirv_warp.cpp
                       src/shader_recompiler/backend/spirv/spirv_emit_context.cpp
                       src/shader_recompiler/backend/spirv/spirv_emit_context.h
+                      src/shader_recompiler/backend/spirv/raw_access_chains.cpp
+                      src/shader_recompiler/backend/spirv/raw_access_chains.h
                       src/shader_recompiler/frontend/translate/data_share.cpp
                       src/shader_recompiler/frontend/translate/export.cpp
                       src/shader_recompiler/frontend/translate/scalar_alu.cpp
@@ -1026,6 +1028,7 @@ set(SHADER_RECOMPILER src/shader_recompiler/profile.h
                       src/shader_recompiler/ir/passes/flatten_extended_userdata_pass.cpp
                       src/shader_recompiler/ir/passes/hull_shader_transform.cpp
                       src/shader_recompiler/ir/passes/identity_removal_pass.cpp
+                      src/shader_recompiler/ir/passes/coalesce_buffer_loads_pass.cpp
                       src/shader_recompiler/ir/passes/inject_clip_distance_attributes.cpp
                       src/shader_recompiler/ir/passes/ir_passes.h
                       src/shader_recompiler/ir/passes/lower_buffer_format_to_raw.cpp

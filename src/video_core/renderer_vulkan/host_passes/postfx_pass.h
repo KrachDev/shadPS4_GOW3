@@ -82,6 +82,7 @@ private:
     vk::UniqueSampler linear_sampler;
     bool compact_images{};
     bool packed_edges{};
+    bool use_raw_access_chains{};
     std::array<Kernel, static_cast<u32>(Program::Count)> kernels;
     std::vector<std::unique_ptr<Surface>> images;
     u32 next_image{};

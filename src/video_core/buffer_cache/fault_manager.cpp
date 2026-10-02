@@ -52,7 +52,8 @@ FaultManager::FaultManager(const Vulkan::Instance& instance, Vulkan::Scheduler& 
     std::vector<std::string> defines{{fmt::format("CACHING_PAGEBITS={}", caching_pagebits),
                                       fmt::format("MAX_PAGE_FAULTS={}", MaxPageFaults)}};
     const auto module = Vulkan::Compile(HostShaders::FAULT_BUFFER_PROCESS_COMP,
-                                        vk::ShaderStageFlagBits::eCompute, device, defines);
+                                        vk::ShaderStageFlagBits::eCompute, device, defines,
+                                        instance.UsesRawAccessChains());
     Vulkan::SetObjectName(device, module, "Fault Buffer Parser");
 
     const vk::PipelineShaderStageCreateInfo shader_ci = {

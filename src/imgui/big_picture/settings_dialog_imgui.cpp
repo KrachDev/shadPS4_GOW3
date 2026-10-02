@@ -92,6 +92,7 @@ void SettingsWindow::LoadSettings(std::string profile) {
         readbacksModeSetting = EmulatorSettings.GetReadbacksMode();
         readbackLinearImagesSetting = EmulatorSettings.IsReadbackLinearImagesEnabled();
         directMemoryAccessSetting = EmulatorSettings.IsDirectMemoryAccessEnabled();
+        nvRawAccessChainsSetting = EmulatorSettings.IsNvRawAccessChainsEnabled();
         // Windows static guest red-zone protection
         windowsGuestRedZoneProtectionModeSetting =
             static_cast<int>(EmulatorSettings.GetWindowsGuestRedZoneProtectionMode());
@@ -160,6 +161,7 @@ void SettingsWindow::SaveSettings(std::string profile) {
         EmulatorSettings.SetReadbacksMode(readbacksModeSetting, true);
         EmulatorSettings.SetReadbackLinearImagesEnabled(readbackLinearImagesSetting, true);
         EmulatorSettings.SetDirectMemoryAccessEnabled(directMemoryAccessSetting, true);
+        EmulatorSettings.SetNvRawAccessChainsEnabled(nvRawAccessChainsSetting, true);
         // Windows static guest red-zone protection
         EmulatorSettings.SetWindowsGuestRedZoneProtectionMode(
             static_cast<WindowsGuestRedZoneProtectionMode>(
@@ -794,6 +796,8 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             AddSettingCombo("Readbacks Mode", readbacksModeSetting, readbacksModeOptions);
             AddSettingCheckbox("Enable Readback Linear Images", readbackLinearImagesSetting);
             AddSettingCheckbox("Enable Direct Memory Access", directMemoryAccessSetting);
+            AddSettingCheckbox("NVIDIA Raw Access Chains (Requires Restart)",
+                               nvRawAccessChainsSetting);
 #ifdef _WIN32
             // Windows static guest red-zone protection
             AddSettingCombo("Windows Guest Red Zone Protection (Requires Restart)",

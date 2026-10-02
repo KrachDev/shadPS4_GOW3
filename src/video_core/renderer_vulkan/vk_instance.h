@@ -137,6 +137,10 @@ public:
         return nv_low_latency2;
     }
 
+    bool UsesRawAccessChains() const {
+        return nv_raw_access_chains;
+    }
+
     TracyVkCtx GetProfilerContext() const {
         return profiler_context;
     }
@@ -574,6 +578,7 @@ private:
     bool present_wait{};
     bool surface_capabilities2{};
     bool nv_low_latency2{};
+    bool nv_raw_access_chains{};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
     bool amd_shader_explicit_vertex_parameter{};

@@ -257,6 +257,10 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     ctx.AddCapability(spv::Capability::Int8);
     ctx.AddCapability(spv::Capability::Int16);
     ctx.AddCapability(spv::Capability::Int64);
+    if (profile.use_raw_access_chains) {
+        ctx.AddExtension("SPV_NV_raw_access_chains");
+        ctx.AddCapability(spv::Capability::RawAccessChainsNV);
+    }
     ctx.AddCapability(spv::Capability::StorageBuffer8BitAccess);
     ctx.AddCapability(spv::Capability::StorageBuffer16BitAccess);
     if (info.uses_fp16) {
