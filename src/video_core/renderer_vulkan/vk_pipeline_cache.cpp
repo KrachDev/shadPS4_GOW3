@@ -1055,6 +1055,9 @@ struct PipelineCache::OptimizationState {
         u64 srt{};
         u64 compute{};
         u64 both{};
+        u64 compute_calls{};
+        u64 after_compute{};
+        std::array<u64, 4> compute_misses{};
     } fastpath_stats{};
 
     GraphicsDependencyKey graphics_dependency{};
@@ -1709,6 +1712,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     auto& stats = opt.fastpath_stats;
     ++stats.lookups;
     const bool after_compute = std::exchange(opt.graphics_after_compute, false);
+    stats.after_compute += after_compute;
 
     if (opt.graphics_valid && opt.graphics_cacheable && opt.graphics_pipeline &&
         liverpool->GraphicsPipelineGeneration() == opt.graphics_dependency.fixed_generation &&
@@ -1723,6 +1727,15 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
         }
     }
 
+    if (after_compute) {
+        const u32 reason =
+            !opt.graphics_valid || !opt.graphics_cacheable || !opt.graphics_pipeline ? 0 :
+            liverpool->GraphicsPipelineGeneration() != opt.graphics_dependency.fixed_generation ? 1 :
+            GetEffectiveDepthStencilState(liverpool->regs).needs_attachment !=
+                    opt.graphics_dependency.depth_stencil_attachment ? 2 : 3;
+        ++stats.compute_misses[reason];
+    }
+
     const auto* pipeline = ResolveGraphicsPipelineSlow();
     opt.graphics_pipeline = pipeline;
     opt.graphics_valid = pipeline != nullptr;
@@ -1735,9 +1748,12 @@ void PipelineCache::LogGraphicsFastpathStats(u64 frame) {
     QueueGraphicsPipelineTask(std::packaged_task<void()>{[stats, frame] {
         LOG_WARNING(Render_Vulkan,
                     "Pipeline fast paths, last 64 frames (frame {}): lookups={} hits={} "
-                    "SRT={} compute={} both={} avoided={}",
+                    "SRT={} compute={} both={} avoided={} compute_calls={} after_compute={} "
+                    "compute_miss[cache={} generation={} depth={} stages={}]",
                     frame, stats.lookups, stats.hits, stats.srt, stats.compute, stats.both,
-                    stats.srt + stats.compute - stats.both);
+                    stats.srt + stats.compute - stats.both, stats.compute_calls, stats.after_compute,
+                    stats.compute_misses[0], stats.compute_misses[1], stats.compute_misses[2],
+                    stats.compute_misses[3]);
     }});
 }
 
@@ -1857,6 +1873,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         return nullptr;
     }
     optimization->graphics_after_compute = true;
+    ++optimization->fastpath_stats.compute_calls;
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
         const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
