@@ -16,6 +16,7 @@
 #include <ranges>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 #if defined(__AVX2__)
 #include <immintrin.h>
@@ -1033,6 +1034,7 @@ struct GraphicsDependencyKey {
     // DB_DEPTH_CONTROL, DB_RENDER_CONTROL and stencil registers do not advance the pipeline
     // generation.
     bool depth_stencil_attachment{};
+    bool has_srt{};
 };
 
 [[nodiscard]] bool MatchesShaderBinary(const AmdGpu::ShaderProgram& shader_program, u64 hash) {
@@ -1047,11 +1049,20 @@ struct GraphicsDependencyKey {
 } // namespace
 
 struct PipelineCache::OptimizationState {
+    struct FastpathStats {
+        u64 lookups{};
+        u64 hits{};
+        u64 srt{};
+        u64 compute{};
+        u64 both{};
+    } fastpath_stats{};
+
     GraphicsDependencyKey graphics_dependency{};
     const GraphicsPipeline* graphics_pipeline{};
     bool graphics_valid{};
     bool graphics_cacheable{};
     bool shader_compile_pending{};
+    bool graphics_after_compute{};
     std::array<StageCurrentEntry, MaxShaderStages> current_stages{};
 
     [[nodiscard]] bool MatchesGraphicsDependency(PipelineCache& cache);
@@ -1124,6 +1135,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
     PipelineCache& cache) {
     graphics_dependency.active_mask = 0;
+    graphics_dependency.has_srt = false;
     graphics_dependency.fixed_generation = cache.liverpool->GraphicsPipelineGeneration();
     graphics_dependency.depth_stencil_attachment =
         GetEffectiveDepthStencilState(cache.liverpool->regs).needs_attachment;
@@ -1164,6 +1176,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
         }
 
         graphics_dependency.active_mask |= 1U << logical_index;
+        graphics_dependency.has_srt |= !program.specialization_plan_cacheable;
         graphics_dependency.stages[logical_index] = stage_cache;
         auto& stage_dependency = graphics_dependency.stage_keys[logical_index];
         if (program.specialization_plan_cacheable) {
@@ -1693,12 +1706,19 @@ PipelineCache::~PipelineCache() {
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     auto& opt = *optimization;
+    auto& stats = opt.fastpath_stats;
+    ++stats.lookups;
+    const bool after_compute = std::exchange(opt.graphics_after_compute, false);
 
     if (opt.graphics_valid && opt.graphics_cacheable && opt.graphics_pipeline &&
         liverpool->GraphicsPipelineGeneration() == opt.graphics_dependency.fixed_generation &&
         GetEffectiveDepthStencilState(liverpool->regs).needs_attachment ==
             opt.graphics_dependency.depth_stencil_attachment) {
         if (opt.MatchesGraphicsDependency(*this)) {
+            ++stats.hits;
+            stats.srt += opt.graphics_dependency.has_srt;
+            stats.compute += after_compute;
+            stats.both += opt.graphics_dependency.has_srt && after_compute;
             return opt.graphics_pipeline;
         }
     }
@@ -1708,6 +1728,17 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     opt.graphics_valid = pipeline != nullptr;
     opt.graphics_cacheable = pipeline && opt.CaptureGraphicsDependency(*this);
     return pipeline;
+}
+
+void PipelineCache::LogGraphicsFastpathStats(u64 frame) {
+    const auto stats = std::exchange(optimization->fastpath_stats, {});
+    QueueGraphicsPipelineTask(std::packaged_task<void()>{[stats, frame] {
+        LOG_WARNING(Render_Vulkan,
+                    "Pipeline fast paths, last 64 frames (frame {}): lookups={} hits={} "
+                    "SRT={} compute={} both={} avoided={}",
+                    frame, stats.lookups, stats.hits, stats.srt, stats.compute, stats.both,
+                    stats.srt + stats.compute - stats.both);
+    }});
 }
 
 const GraphicsPipeline* PipelineCache::ResolveGraphicsPipelineSlow() {
@@ -1825,6 +1856,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     if (!RefreshComputeKey()) {
         return nullptr;
     }
+    optimization->graphics_after_compute = true;
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
         const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
