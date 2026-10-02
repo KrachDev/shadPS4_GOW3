@@ -1058,6 +1058,7 @@ struct PipelineCache::OptimizationState {
         u64 compute_calls{};
         u64 after_compute{};
         std::array<u64, 4> compute_misses{};
+        std::array<u64, 6> compute_stage_misses{};
     } fastpath_stats{};
 
     GraphicsDependencyKey graphics_dependency{};
@@ -1068,12 +1069,18 @@ struct PipelineCache::OptimizationState {
     bool graphics_after_compute{};
     std::array<StageCurrentEntry, MaxShaderStages> current_stages{};
 
-    [[nodiscard]] bool MatchesGraphicsDependency(PipelineCache& cache);
+    [[nodiscard]] bool MatchesGraphicsDependency(PipelineCache& cache, bool after_compute);
     [[nodiscard]] bool CaptureGraphicsDependency(PipelineCache& cache);
 };
 
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
-    PipelineCache& cache) {
+    PipelineCache& cache, bool after_compute) {
+    const auto mismatch = [this, after_compute](u32 reason) {
+        if (after_compute) {
+            ++fastpath_stats.compute_stage_misses[reason];
+        }
+        return false;
+    };
     const u32 expected_active_mask = graphics_dependency.active_mask;
     Shader::Backend::Bindings binding{};
     for (u32 logical_index = 0; logical_index < MaxShaderStages; ++logical_index) {
@@ -1084,12 +1091,12 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
         const auto* shader_program =
             cache.liverpool->regs.ProgramForStage(static_cast<u32>(stage_cache.stage));
         if (!shader_program || !shader_program->Address<u32*>()) {
-            return false;
+            return mismatch(0);
         }
         const VAddr program_base = shader_program->Address<VAddr>();
         auto& program = *stage_cache.program;
         if (!program.specialization_plan_ready || program_base != stage_cache.program_base) {
-            return false;
+            return mismatch(0);
         }
 
         auto& info = program.info;
@@ -1098,18 +1105,20 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
             const auto& shape = program.specialization_shape;
             if (program.specialization_shape_epoch != stage_cache.shape_epoch ||
                 shape.modules_generation != program.modules_generation ||
-                shape.permutation != program.current_permutation || shape.start != binding ||
-                !MatchesShaderBinary(*shader_program, info.pgm_hash) ||
+                shape.permutation != program.current_permutation || shape.start != binding) {
+                return mismatch(1);
+            }
+            if (!MatchesShaderBinary(*shader_program, info.pgm_hash) ||
                 (stage_cache.stage == Stage::Geometry &&
                  !MatchesShaderBinary(cache.liverpool->regs.vs_program,
                                       shape.runtime_info.gs_info.vs_copy_hash))) {
-                return false;
+                return mismatch(2);
             }
             RefreshDynamicProgramData(info, program_base, shader_program->user_data);
         } else {
             if (!MatchesUserData(graphics_dependency.stage_keys[logical_index],
                                  shader_program->user_data)) {
-                return false;
+                return mismatch(3);
             }
             info.pgm_base = program_base;
             info.user_data = shader_program->user_data;
@@ -1118,7 +1127,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
         if (!cached_fetch_shader.IsUsable(info) ||
             cached_fetch_shader.revision !=
                 graphics_dependency.stage_keys[logical_index].fetch_shader_revision) {
-            return false;
+            return mismatch(4);
         }
         if (resolve_resources) {
             ResolveStageResources(info, cached_fetch_shader.parsed, program.resolved_resources);
@@ -1127,7 +1136,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
             const auto& expected = program.specialization_shape.keys;
             if (expected.size() != keys.size() ||
                 std::memcmp(expected.data(), keys.data(), keys.size() * sizeof(u64)) != 0) {
-                return false;
+                return mismatch(5);
             }
         }
         info.AddBindings(binding);
@@ -1718,7 +1727,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
         liverpool->GraphicsPipelineGeneration() == opt.graphics_dependency.fixed_generation &&
         GetEffectiveDepthStencilState(liverpool->regs).needs_attachment ==
             opt.graphics_dependency.depth_stencil_attachment) {
-        if (opt.MatchesGraphicsDependency(*this)) {
+        if (opt.MatchesGraphicsDependency(*this, after_compute)) {
             ++stats.hits;
             stats.srt += opt.graphics_dependency.has_srt;
             stats.compute += after_compute;
@@ -1749,11 +1758,15 @@ void PipelineCache::LogGraphicsFastpathStats(u64 frame) {
         LOG_WARNING(Render_Vulkan,
                     "Pipeline fast paths, last 64 frames (frame {}): lookups={} hits={} "
                     "SRT={} compute={} both={} avoided={} compute_calls={} after_compute={} "
-                    "compute_miss[cache={} generation={} depth={} stages={}]",
+                    "compute_miss[cache={} generation={} depth={} stages={}] "
+                    "stage_miss[program={} shape={} binary={} user_data={} fetch={} resources={}]",
                     frame, stats.lookups, stats.hits, stats.srt, stats.compute, stats.both,
                     stats.srt + stats.compute - stats.both, stats.compute_calls, stats.after_compute,
                     stats.compute_misses[0], stats.compute_misses[1], stats.compute_misses[2],
-                    stats.compute_misses[3]);
+                    stats.compute_misses[3], stats.compute_stage_misses[0],
+                    stats.compute_stage_misses[1], stats.compute_stage_misses[2],
+                    stats.compute_stage_misses[3], stats.compute_stage_misses[4],
+                    stats.compute_stage_misses[5]);
     }});
 }
 
