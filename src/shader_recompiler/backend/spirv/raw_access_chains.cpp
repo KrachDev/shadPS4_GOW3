@@ -35,8 +35,7 @@ void ConvertRawAccessChains(std::vector<u32>& code) {
             return u32{0};
         }
     };
-    u32 uint_type{}, uint64_type{};
-    bool has_int64{};
+    u32 uint_type{};
     for (size_t pos = 5; pos < code.size(); pos += code[pos] >> 16) {
         const auto op = static_cast<spv::Op>(code[pos] & 0xffff);
         const auto words = std::span{code}.subspan(pos, code[pos] >> 16);
@@ -48,11 +47,6 @@ void ConvertRawAccessChains(std::vector<u32>& code) {
         }
         if (op == spv::Op::OpTypeInt && words[2] == 32 && words[3] == 0) {
             uint_type = words[1];
-        } else if (op == spv::Op::OpTypeInt && words[2] == 64 && words[3] == 0) {
-            uint64_type = words[1];
-        } else if (op == spv::Op::OpCapability &&
-                   words[1] == static_cast<u32>(spv::Capability::Int64)) {
-            has_int64 = true;
         } else if (op == spv::Op::OpDecorate) {
             qualifiers[words[1]] |= qualifier(words[2]);
             if (words[2] == static_cast<u32>(spv::Decoration::ArrayStride)) {
@@ -191,28 +185,19 @@ void ConvertRawAccessChains(std::vector<u32>& code) {
         uint_type = next_id++;
         emit(globals, spv::Op::OpTypeInt, {uint_type, 32, 0});
     }
-    if (!uint64_type) {
-        uint64_type = next_id++;
-        emit(globals, spv::Op::OpTypeInt, {uint64_type, 64, 0});
-    }
-    std::map<u32, u32> stride_constants, offset_constants;
-    const auto make_constant = [&](u32 value, bool wide) {
-        auto& constants = wide ? stride_constants : offset_constants;
+    std::map<u32, u32> constants;
+    const auto make_constant = [&](u32 value) {
         auto [it, added] = constants.try_emplace(value, 0);
         if (added) {
             it->second = next_id++;
-            if (wide) {
-                emit(globals, spv::Op::OpConstant, {uint64_type, it->second, value, 0});
-            } else {
-                emit(globals, spv::Op::OpConstant, {uint_type, it->second, value});
-            }
+            emit(globals, spv::Op::OpConstant, {uint_type, it->second, value});
         }
         return it->second;
     };
     for (auto& access : accesses) {
         if (access.raw_id) {
-            access.stride = make_constant(access.stride, true);
-            access.offset = make_constant(access.offset, false);
+            access.stride = make_constant(access.stride);
+            access.offset = make_constant(access.offset);
             for (u32 decoration = 0; decoration < 32; ++decoration) {
                 if (access.qualifiers & (u32{1} << decoration)) {
                     emit(annotations, spv::Op::OpDecorate, {access.raw_id, decoration});
@@ -230,9 +215,6 @@ void ConvertRawAccessChains(std::vector<u32>& code) {
         if (!capability_added && op != spv::Op::OpCapability) {
             emit(output, spv::Op::OpCapability,
                  {static_cast<u32>(spv::Capability::RawAccessChainsNV)});
-            if (!has_int64) {
-                emit(output, spv::Op::OpCapability, {static_cast<u32>(spv::Capability::Int64)});
-            }
             capability_added = true;
         }
         if (!extension_added && op != spv::Op::OpCapability && op != spv::Op::OpExtension) {

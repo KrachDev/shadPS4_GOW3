@@ -1218,7 +1218,7 @@ Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u
             const Id pointer =
                 profile.use_raw_access_chains
                     ? OpRawAccessChainNV(
-                          scalar_pointer, base, Constant(U64, u64{1} << shift), element,
+                          scalar_pointer, base, ConstU32(1u << shift), element,
                           u32_zero_value, spv::RawAccessChainOperandsMask::RobustnessPerComponentNV)
                     : OpAccessChain(scalar_pointer, base, u32_zero_value, element);
             if (store) {
@@ -1247,18 +1247,18 @@ Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u
     const Id vector_label = OpLabel();
     const Id scalar_label = OpLabel();
     const Id merge_label = OpLabel();
-    const u32 boundary = u32{1} << (32 - shift);
+    const u32 boundary = u32{1} << (31 - shift);
     const Id low_index = OpBitwiseAnd(U32[1], index, ConstU32(boundary - 1));
     const Id contiguous = OpULessThanEqual(U1[1], low_index, ConstU32(boundary - count));
     OpSelectionMerge(merge_label, spv::SelectionControlMask::MaskNone);
     OpBranchConditional(contiguous, vector_label, scalar_label);
 
     AddLabel(vector_label);
-    const Id byte_offset = OpShiftLeftLogical(U32[1], index, ConstU32(shift));
-    const Id page = OpShiftRightLogical(U32[1], index, ConstU32(32 - shift));
+    const Id byte_offset = OpShiftLeftLogical(U32[1], low_index, ConstU32(shift));
+    const Id page = OpShiftRightLogical(U32[1], index, ConstU32(31 - shift));
     const Id pointer = OpRawAccessChainNV(
         TypePointer(spv::StorageClass::StorageBuffer, type), base,
-        Constant(U64, u64{1} << 32), page, byte_offset,
+        ConstU32(u32{1} << 31), page, byte_offset,
         spv::RawAccessChainOperandsMask::RobustnessPerComponentNV);
     Id vector_result{};
     if (store) {

@@ -92,7 +92,7 @@ struct ShaderCompileResult {
 namespace {
 
 constexpr std::array<u8, 8> NativePipelineCacheMagic{'S', 'H', 'A', 'D', 'V', 'K', 'P', 'C'};
-constexpr u32 NativePipelineCacheVersion = 2;
+constexpr u32 NativePipelineCacheVersion = 3;
 constexpr u64 MaxNativePipelineCacheSize = 512ULL * 1024 * 1024;
 
 struct NativePipelineCacheHeader {

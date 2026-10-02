@@ -22,7 +22,7 @@ namespace Vulkan {
 
 namespace {
 // Increment when compiler options or resources change without a glslang version change.
-constexpr u32 HostShaderCompilerRevision = 2;
+constexpr u32 HostShaderCompilerRevision = 3;
 
 constexpr TBuiltInResource DefaultTBuiltInResource = {
     .maxLights = 32,
