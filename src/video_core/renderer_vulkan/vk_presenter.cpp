@@ -980,9 +980,6 @@ void Presenter::PresentWaitThread(std::stop_token token) {
 }
 
 void Presenter::EndGuestFrame() {
-    if ((gcp_frame_id & 63) == 0) {
-        rasterizer->GetPipelineCache().LogGraphicsFastpathStats(gcp_frame_id);
-    }
     const u64 present_id = PresentIdOfFrame(gcp_frame_id);
     const bool reflex = reflex_semaphore && swapchain.HasLowLatency();
     if (reflex) {

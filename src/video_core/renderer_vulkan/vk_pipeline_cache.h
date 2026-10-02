@@ -160,8 +160,6 @@ public:
 
     const ComputePipeline* GetComputePipeline();
 
-    void LogGraphicsFastpathStats(u64 frame);
-
     std::optional<Result> GetProgram(Shader::Stage stage, Shader::LogicalStage l_stage,
                                      const Shader::ShaderParams& params,
                                      Shader::Backend::Bindings& binding);

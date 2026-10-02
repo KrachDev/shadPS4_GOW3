@@ -16,7 +16,6 @@
 #include <ranges>
 #include <span>
 #include <type_traits>
-#include <utility>
 
 #if defined(__AVX2__)
 #include <immintrin.h>
@@ -1034,7 +1033,6 @@ struct GraphicsDependencyKey {
     // DB_DEPTH_CONTROL, DB_RENDER_CONTROL and stencil registers do not advance the pipeline
     // generation.
     bool depth_stencil_attachment{};
-    bool has_srt{};
 };
 
 [[nodiscard]] bool MatchesShaderBinary(const AmdGpu::ShaderProgram& shader_program, u64 hash) {
@@ -1049,38 +1047,19 @@ struct GraphicsDependencyKey {
 } // namespace
 
 struct PipelineCache::OptimizationState {
-    struct FastpathStats {
-        u64 lookups{};
-        u64 hits{};
-        u64 srt{};
-        u64 compute{};
-        u64 both{};
-        u64 compute_calls{};
-        u64 after_compute{};
-        std::array<u64, 4> compute_misses{};
-        std::array<u64, 6> compute_stage_misses{};
-    } fastpath_stats{};
-
     GraphicsDependencyKey graphics_dependency{};
     const GraphicsPipeline* graphics_pipeline{};
     bool graphics_valid{};
     bool graphics_cacheable{};
     bool shader_compile_pending{};
-    bool graphics_after_compute{};
     std::array<StageCurrentEntry, MaxShaderStages> current_stages{};
 
-    [[nodiscard]] bool MatchesGraphicsDependency(PipelineCache& cache, bool after_compute);
+    [[nodiscard]] bool MatchesGraphicsDependency(PipelineCache& cache);
     [[nodiscard]] bool CaptureGraphicsDependency(PipelineCache& cache);
 };
 
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
-    PipelineCache& cache, bool after_compute) {
-    const auto mismatch = [this, after_compute](u32 reason) {
-        if (after_compute) {
-            ++fastpath_stats.compute_stage_misses[reason];
-        }
-        return false;
-    };
+    PipelineCache& cache) {
     const u32 expected_active_mask = graphics_dependency.active_mask;
     Shader::Backend::Bindings binding{};
     for (u32 logical_index = 0; logical_index < MaxShaderStages; ++logical_index) {
@@ -1091,12 +1070,12 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
         const auto* shader_program =
             cache.liverpool->regs.ProgramForStage(static_cast<u32>(stage_cache.stage));
         if (!shader_program || !shader_program->Address<u32*>()) {
-            return mismatch(0);
+            return false;
         }
         const VAddr program_base = shader_program->Address<VAddr>();
         auto& program = *stage_cache.program;
         if (!program.specialization_plan_ready || program_base != stage_cache.program_base) {
-            return mismatch(0);
+            return false;
         }
 
         auto& info = program.info;
@@ -1105,20 +1084,18 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
             const auto& shape = program.specialization_shape;
             if (program.specialization_shape_epoch != stage_cache.shape_epoch ||
                 shape.modules_generation != program.modules_generation ||
-                shape.permutation != program.current_permutation || shape.start != binding) {
-                return mismatch(1);
-            }
-            if (!MatchesShaderBinary(*shader_program, info.pgm_hash) ||
+                shape.permutation != program.current_permutation || shape.start != binding ||
+                !MatchesShaderBinary(*shader_program, info.pgm_hash) ||
                 (stage_cache.stage == Stage::Geometry &&
                  !MatchesShaderBinary(cache.liverpool->regs.vs_program,
                                       shape.runtime_info.gs_info.vs_copy_hash))) {
-                return mismatch(2);
+                return false;
             }
             RefreshDynamicProgramData(info, program_base, shader_program->user_data);
         } else {
             if (!MatchesUserData(graphics_dependency.stage_keys[logical_index],
                                  shader_program->user_data)) {
-                return mismatch(3);
+                return false;
             }
             info.pgm_base = program_base;
             info.user_data = shader_program->user_data;
@@ -1127,7 +1104,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
         if (!cached_fetch_shader.IsUsable(info) ||
             cached_fetch_shader.revision !=
                 graphics_dependency.stage_keys[logical_index].fetch_shader_revision) {
-            return mismatch(4);
+            return false;
         }
         if (resolve_resources) {
             ResolveStageResources(info, cached_fetch_shader.parsed, program.resolved_resources);
@@ -1136,7 +1113,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
             const auto& expected = program.specialization_shape.keys;
             if (expected.size() != keys.size() ||
                 std::memcmp(expected.data(), keys.data(), keys.size() * sizeof(u64)) != 0) {
-                return mismatch(5);
+                return false;
             }
         }
         info.AddBindings(binding);
@@ -1147,7 +1124,6 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
     PipelineCache& cache) {
     graphics_dependency.active_mask = 0;
-    graphics_dependency.has_srt = false;
     graphics_dependency.fixed_generation = cache.liverpool->GraphicsPipelineGeneration();
     graphics_dependency.depth_stencil_attachment =
         GetEffectiveDepthStencilState(cache.liverpool->regs).needs_attachment;
@@ -1188,7 +1164,6 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
         }
 
         graphics_dependency.active_mask |= 1U << logical_index;
-        graphics_dependency.has_srt |= !program.specialization_plan_cacheable;
         graphics_dependency.stages[logical_index] = stage_cache;
         auto& stage_dependency = graphics_dependency.stage_keys[logical_index];
         if (program.specialization_plan_cacheable) {
@@ -1718,31 +1693,14 @@ PipelineCache::~PipelineCache() {
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     auto& opt = *optimization;
-    auto& stats = opt.fastpath_stats;
-    ++stats.lookups;
-    const bool after_compute = std::exchange(opt.graphics_after_compute, false);
-    stats.after_compute += after_compute;
 
     if (opt.graphics_valid && opt.graphics_cacheable && opt.graphics_pipeline &&
         liverpool->GraphicsPipelineGeneration() == opt.graphics_dependency.fixed_generation &&
         GetEffectiveDepthStencilState(liverpool->regs).needs_attachment ==
             opt.graphics_dependency.depth_stencil_attachment) {
-        if (opt.MatchesGraphicsDependency(*this, after_compute)) {
-            ++stats.hits;
-            stats.srt += opt.graphics_dependency.has_srt;
-            stats.compute += after_compute;
-            stats.both += opt.graphics_dependency.has_srt && after_compute;
+        if (opt.MatchesGraphicsDependency(*this)) {
             return opt.graphics_pipeline;
         }
-    }
-
-    if (after_compute) {
-        const u32 reason =
-            !opt.graphics_valid || !opt.graphics_cacheable || !opt.graphics_pipeline ? 0 :
-            liverpool->GraphicsPipelineGeneration() != opt.graphics_dependency.fixed_generation ? 1 :
-            GetEffectiveDepthStencilState(liverpool->regs).needs_attachment !=
-                    opt.graphics_dependency.depth_stencil_attachment ? 2 : 3;
-        ++stats.compute_misses[reason];
     }
 
     const auto* pipeline = ResolveGraphicsPipelineSlow();
@@ -1750,24 +1708,6 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     opt.graphics_valid = pipeline != nullptr;
     opt.graphics_cacheable = pipeline && opt.CaptureGraphicsDependency(*this);
     return pipeline;
-}
-
-void PipelineCache::LogGraphicsFastpathStats(u64 frame) {
-    const auto stats = std::exchange(optimization->fastpath_stats, {});
-    QueueGraphicsPipelineTask(std::packaged_task<void()>{[stats, frame] {
-        LOG_WARNING(Render_Vulkan,
-                    "Pipeline fast paths, last 64 frames (frame {}): lookups={} hits={} "
-                    "SRT={} compute={} both={} avoided={} compute_calls={} after_compute={} "
-                    "compute_miss[cache={} generation={} depth={} stages={}] "
-                    "stage_miss[program={} shape={} binary={} user_data={} fetch={} resources={}]",
-                    frame, stats.lookups, stats.hits, stats.srt, stats.compute, stats.both,
-                    stats.srt + stats.compute - stats.both, stats.compute_calls, stats.after_compute,
-                    stats.compute_misses[0], stats.compute_misses[1], stats.compute_misses[2],
-                    stats.compute_misses[3], stats.compute_stage_misses[0],
-                    stats.compute_stage_misses[1], stats.compute_stage_misses[2],
-                    stats.compute_stage_misses[3], stats.compute_stage_misses[4],
-                    stats.compute_stage_misses[5]);
-    }});
 }
 
 const GraphicsPipeline* PipelineCache::ResolveGraphicsPipelineSlow() {
@@ -1885,8 +1825,6 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
     if (!RefreshComputeKey()) {
         return nullptr;
     }
-    optimization->graphics_after_compute = true;
-    ++optimization->fastpath_stats.compute_calls;
     const auto [it, is_new] = compute_pipelines.try_emplace(compute_key);
     if (is_new) {
         const auto pipeline_hash = std::hash<ComputePipelineKey>{}(compute_key);
