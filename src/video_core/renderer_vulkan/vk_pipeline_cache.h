@@ -104,6 +104,7 @@ struct Program {
     /// Changes whenever a permutation is added or replaced.
     u32 modules_generation{};
     SpecializationShape specialization_shape{};
+    u64 specialization_shape_epoch{};
     ResolvedStageResources resolved_resources{};
     boost::container::small_vector<FetchShaderCacheEntry, MaxFetchShaderCacheEntries>
         fetch_shader_cache;
@@ -218,8 +219,6 @@ private:
                                         Shader::Backend::Bindings& binding,
                                         Shader::StageSpecialization&& specialization,
                                         size_t permutation_index, u64 permutation_hash);
-    bool CanReuseGraphicsPipeline() const;
-
     bool RefreshGraphicsKey();
     bool RefreshGraphicsStages();
     bool RefreshComputeKey();

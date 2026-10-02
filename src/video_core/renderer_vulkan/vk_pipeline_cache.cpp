@@ -960,6 +960,7 @@ void RecordSpecializationShape(Program& program, size_t permutation, u64 fetch_s
     shape.start = start;
     shape.runtime_info = runtime_info;
     shape.keys.assign(keys.begin(), keys.end());
+    ++program.specialization_shape_epoch;
 }
 
 /// SHADPS4_VERIFY_STAGE_SHAPE=1 also runs the full comparison on every shape match and logs
@@ -1016,10 +1017,17 @@ struct StageRawDependencyKey {
 #endif
 }
 
+struct StageCurrentEntry {
+    Program* program{};
+    VAddr program_base{};
+    u64 shape_epoch{};
+    Stage stage{};
+};
+
 struct GraphicsDependencyKey {
     u64 fixed_generation{};
     std::array<StageRawDependencyKey, MaxShaderStages> stage_keys{};
-    std::array<VAddr, MaxShaderStages> stage_bases{};
+    std::array<StageCurrentEntry, MaxShaderStages> stages{};
     u32 active_mask{};
     // The key's depth and stencil formats follow the effective depth-stencil state, whose
     // DB_DEPTH_CONTROL, DB_RENDER_CONTROL and stencil registers do not advance the pipeline
@@ -1027,11 +1035,14 @@ struct GraphicsDependencyKey {
     bool depth_stencil_attachment{};
 };
 
-struct StageCurrentEntry {
-    Program* program{};
-    VAddr program_base{};
-    Stage stage{};
-};
+[[nodiscard]] bool MatchesShaderBinary(const AmdGpu::ShaderProgram& shader_program, u64 hash) {
+    const auto* code = shader_program.Address<const u32*>();
+    if (!code || code[0] != 0xBEEB03FF) {
+        return false;
+    }
+    const auto* info = reinterpret_cast<const AmdGpu::BinaryInfo*>(code + (code[1] + 1) * 2);
+    return info->Valid() && info->shader_hash == hash;
+}
 
 } // namespace
 
@@ -1050,18 +1061,12 @@ struct PipelineCache::OptimizationState {
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
     PipelineCache& cache) {
     const u32 expected_active_mask = graphics_dependency.active_mask;
+    Shader::Backend::Bindings binding{};
     for (u32 logical_index = 0; logical_index < MaxShaderStages; ++logical_index) {
-        const bool active = cache.infos[logical_index] != nullptr;
-        if (active != ((expected_active_mask >> logical_index) & 1U)) {
-            return false;
-        }
-        if (!active) {
+        if (((expected_active_mask >> logical_index) & 1U) == 0) {
             continue;
         }
-        const auto& stage_cache = current_stages[logical_index];
-        if (!stage_cache.program || cache.infos[logical_index] != &stage_cache.program->info) {
-            return false;
-        }
+        const auto& stage_cache = graphics_dependency.stages[logical_index];
         const auto* shader_program =
             cache.liverpool->regs.ProgramForStage(static_cast<u32>(stage_cache.stage));
         if (!shader_program || !shader_program->Address<u32*>()) {
@@ -1069,29 +1074,56 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
         }
         const VAddr program_base = shader_program->Address<VAddr>();
         auto& program = *stage_cache.program;
-        if (!program.specialization_plan_ready || !program.specialization_plan_cacheable ||
-            program_base != stage_cache.program_base ||
-            program_base != graphics_dependency.stage_bases[logical_index] ||
-            !MatchesUserData(graphics_dependency.stage_keys[logical_index],
-                             shader_program->user_data)) {
+        if (!program.specialization_plan_ready || program_base != stage_cache.program_base) {
             return false;
         }
 
-        program.info.pgm_base = program_base;
-        program.info.user_data = shader_program->user_data;
+        auto& info = program.info;
+        const bool resolve_resources = !program.specialization_plan_cacheable;
+        if (resolve_resources) {
+            const auto& shape = program.specialization_shape;
+            if (program.specialization_shape_epoch != stage_cache.shape_epoch ||
+                shape.modules_generation != program.modules_generation ||
+                shape.permutation != program.current_permutation || shape.start != binding ||
+                !MatchesShaderBinary(*shader_program, info.pgm_hash) ||
+                (stage_cache.stage == Stage::Geometry &&
+                 !MatchesShaderBinary(cache.liverpool->regs.vs_program,
+                                      shape.runtime_info.gs_info.vs_copy_hash))) {
+                return false;
+            }
+            RefreshDynamicProgramData(info, program_base, shader_program->user_data);
+        } else {
+            if (!MatchesUserData(graphics_dependency.stage_keys[logical_index],
+                                 shader_program->user_data)) {
+                return false;
+            }
+            info.pgm_base = program_base;
+            info.user_data = shader_program->user_data;
+        }
         const auto cached_fetch_shader = GetCachedFetchShader(program);
-        if (!cached_fetch_shader.IsUsable(program.info) ||
+        if (!cached_fetch_shader.IsUsable(info) ||
             cached_fetch_shader.revision !=
                 graphics_dependency.stage_keys[logical_index].fetch_shader_revision) {
             return false;
         }
+        if (resolve_resources) {
+            ResolveStageResources(info, cached_fetch_shader.parsed, program.resolved_resources);
+            auto& keys = cache.specialization_shape_keys;
+            BuildSpecializationShapeKeys(info, cached_fetch_shader.parsed, keys);
+            const auto& expected = program.specialization_shape.keys;
+            if (expected.size() != keys.size() ||
+                std::memcmp(expected.data(), keys.data(), keys.size() * sizeof(u64)) != 0) {
+                return false;
+            }
+        }
+        info.AddBindings(binding);
     }
     return true;
 }
 
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
     PipelineCache& cache) {
-    graphics_dependency = {};
+    graphics_dependency.active_mask = 0;
     graphics_dependency.fixed_generation = cache.liverpool->GraphicsPipelineGeneration();
     graphics_dependency.depth_stencil_attachment =
         GetEffectiveDepthStencilState(cache.liverpool->regs).needs_attachment;
@@ -1110,7 +1142,17 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
         }
         const VAddr program_base = shader_program->Address<VAddr>();
         auto& program = *stage_cache.program;
-        if (!BuildSpecializationPlan(program) || program_base != stage_cache.program_base) {
+        BuildSpecializationPlan(program);
+        const auto& shape = program.specialization_shape;
+        if (program_base != stage_cache.program_base ||
+            (!program.specialization_plan_cacheable &&
+             (!program.info.srt_info.walker_func || !IsSpecializationMatchable(program) ||
+              stage_cache.shape_epoch == 0 ||
+              stage_cache.shape_epoch != program.specialization_shape_epoch ||
+              !MatchesShaderBinary(*shader_program, program.info.pgm_hash) ||
+              (stage_cache.stage == Stage::Geometry &&
+               !MatchesShaderBinary(cache.liverpool->regs.vs_program,
+                                    shape.runtime_info.gs_info.vs_copy_hash))))) {
             return false;
         }
 
@@ -1122,9 +1164,11 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
         }
 
         graphics_dependency.active_mask |= 1U << logical_index;
-        graphics_dependency.stage_bases[logical_index] = program_base;
+        graphics_dependency.stages[logical_index] = stage_cache;
         auto& stage_dependency = graphics_dependency.stage_keys[logical_index];
-        std::ranges::copy(shader_program->user_data, stage_dependency.user_data.begin());
+        if (program.specialization_plan_cacheable) {
+            std::ranges::copy(shader_program->user_data, stage_dependency.user_data.begin());
+        }
         stage_dependency.fetch_shader_revision = cached_fetch_shader.revision;
     }
     return true;
@@ -1662,10 +1706,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     const auto* pipeline = ResolveGraphicsPipelineSlow();
     opt.graphics_pipeline = pipeline;
     opt.graphics_valid = pipeline != nullptr;
-    opt.graphics_cacheable = pipeline && CanReuseGraphicsPipeline();
-    if (opt.graphics_cacheable && !opt.CaptureGraphicsDependency(*this)) {
-        opt.graphics_cacheable = false;
-    }
+    opt.graphics_cacheable = pipeline && opt.CaptureGraphicsDependency(*this);
     return pipeline;
 }
 
@@ -1778,21 +1819,6 @@ SHAD_NO_INLINE const GraphicsPipeline* PipelineCache::CreateGraphicsPipeline() {
     QueueGraphicsPipelineTask(std::packaged_task<void()>{
         [task = std::move(build_task)]() mutable { task(); }});
     return nullptr;
-}
-
-bool PipelineCache::CanReuseGraphicsPipeline() const {
-    for (u32 index = 0; index < MaxShaderStages; ++index) {
-        const auto* info = infos[index];
-        if (!info) {
-            continue;
-        }
-        const auto* program = optimization->current_stages[index].program;
-        if (!program || &program->info != info || !program->specialization_plan_ready ||
-            !program->specialization_plan_cacheable) {
-            return false;
-        }
-    }
-    return true;
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
@@ -2337,9 +2363,6 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
 
     BuildSpecializationPlan(program);
     const bool fetch_shader_usable = cached_fetch_shader.IsUsable(info);
-    // The resources were just resolved from guest memory, so the current specialization can be
-    // compared even when descriptors come from an SRT walk. Only the graphics dependency key,
-    // which skips resolution, needs a cacheable plan.
     if (fetch_shader_usable && IsSpecializationMatchable(program)) {
         const size_t current_permutation = program.current_permutation;
         auto& shape_keys = specialization_shape_keys;
@@ -2372,6 +2395,7 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
                 current_stage = {
                     .program = &program,
                     .program_base = params.Base(),
+                    .shape_epoch = program.specialization_shape_epoch,
                     .stage = stage,
                 };
                 return Result{&info, module.module, cached_fetch_shader.parsed,
@@ -2393,6 +2417,7 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
             current_stage = {
                 .program = &program,
                 .program_base = params.Base(),
+                .shape_epoch = program.specialization_shape_epoch,
                 .stage = stage,
             };
             return Result{&info, module.module, cached_fetch_shader.parsed,
