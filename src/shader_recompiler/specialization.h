@@ -323,12 +323,14 @@ struct StageSpecialization {
     boost::container::small_vector<FMaskSpecialization, 8> fmasks;
     boost::container::small_vector<SamplerSpecialization, 16> samplers;
     Backend::Bindings start{};
+    u64 uniform_buffer_mask{};
 
     StageSpecialization() = default;
     StageSpecialization(const Info& info_, RuntimeInfo runtime_info_, const Profile& profile_,
                         Backend::Bindings start_,
                         const std::optional<Gcn::FetchShaderData>* fetch_shader_hint = nullptr)
         : info{&info_}, runtime_info{runtime_info_}, start{start_} {
+        uniform_buffer_mask = info_.UniformBufferMask(profile_, start_.uniform_buffers);
         fetch_shader_data = fetch_shader_hint ? *fetch_shader_hint : Gcn::ParseFetchShader(info_);
         if (info_.stage == Stage::Vertex && fetch_shader_data) {
             // Specialize shader on VS input number types to follow spec.
@@ -402,7 +404,8 @@ struct StageSpecialization {
             return false;
         }
 
-        if (runtime_info != other.runtime_info) {
+        if (runtime_info != other.runtime_info ||
+            uniform_buffer_mask != other.uniform_buffer_mask) {
             return false;
         }
 
@@ -457,12 +460,13 @@ struct StageSpecialization {
 
         u64 lhs_start;
         u64 rhs_start;
-        static_assert(sizeof(Backend::Bindings) == 12);
+        static_assert(sizeof(Backend::Bindings) == 16);
         static_assert(offsetof(Backend::Bindings, buffer) == 4);
         static_assert(offsetof(Backend::Bindings, user_data) == 8);
         std::memcpy(&lhs_start, &start, sizeof(lhs_start));
         std::memcpy(&rhs_start, &other.start, sizeof(rhs_start));
-        if (((lhs_start ^ rhs_start) | (start.user_data ^ other.start.user_data)) != 0) {
+        if (((lhs_start ^ rhs_start) | (start.user_data ^ other.start.user_data) |
+             (start.uniform_buffers ^ other.start.uniform_buffers)) != 0) {
             return false;
         }
 

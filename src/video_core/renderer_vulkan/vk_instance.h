@@ -141,6 +141,22 @@ public:
         return nv_raw_access_chains;
     }
 
+    bool UsesUniformBufferShaders() const {
+        return uniform_buffer_shaders;
+    }
+
+    bool SupportsUniformBufferInt8() const {
+        return vk12_features.uniformAndStorageBuffer8BitAccess;
+    }
+
+    bool SupportsUniformBufferInt16() const {
+        return uniform_buffer_int16;
+    }
+
+    const vk::PhysicalDeviceLimits& GetLimits() const {
+        return properties.limits;
+    }
+
     TracyVkCtx GetProfilerContext() const {
         return profiler_context;
     }
@@ -579,6 +595,8 @@ private:
     bool surface_capabilities2{};
     bool nv_low_latency2{};
     bool nv_raw_access_chains{};
+    bool uniform_buffer_shaders{};
+    bool uniform_buffer_int16{};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
     bool amd_shader_explicit_vertex_parameter{};

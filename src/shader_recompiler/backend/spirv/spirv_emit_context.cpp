@@ -757,10 +757,12 @@ void EmitContext::DefinePushDataBlock() {
     interfaces.push_back(push_data_block);
 }
 
-EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_written, u32 elem_shift,
-                                                 BufferType buffer_type, Id data_type) {
+EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_uniform, bool is_written, u32 elem_shift,
+                                                BufferType buffer_type, Id data_type) {
     // Define array type.
-    const Id record_array_type{TypeRuntimeArray(data_type)};
+    const Id record_array_type =
+        is_uniform ? TypeArray(data_type, ConstU32(profile.max_uniform_buffer_size >> elem_shift))
+                   : TypeRuntimeArray(data_type);
     // Define block struct type. Don't perform decorations twice on the same Id.
     const Id struct_type{TypeStruct(record_array_type)};
     if (std::ranges::find(buf_type_ids, record_array_type.value, &Id::value) ==
@@ -772,13 +774,14 @@ EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_written, u32 elem_shift
         buf_type_ids.push_back(record_array_type);
     }
     // Define buffer binding interface.
-    constexpr auto storage_class = spv::StorageClass::StorageBuffer;
+    const auto storage_class =
+        is_uniform ? spv::StorageClass::Uniform : spv::StorageClass::StorageBuffer;
     const Id struct_pointer_type{TypePointer(storage_class, struct_type)};
     const Id pointer_type = TypePointer(storage_class, data_type);
     const Id id{AddGlobalVariable(struct_pointer_type, storage_class)};
     Decorate(id, spv::Decoration::Binding, binding.unified);
     Decorate(id, spv::Decoration::DescriptorSet, 0U);
-    if (!is_written) {
+    if (!is_uniform && !is_written) {
         Decorate(id, spv::Decoration::NonWritable);
     }
     switch (buffer_type) {
@@ -801,7 +804,7 @@ EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_written, u32 elem_shift
         Name(id, "ssbo_shmem");
         break;
     default:
-        Name(id, fmt::format("ssbo_{}", binding.buffer));
+        Name(id, fmt::format("{}_{}", is_uniform ? "ubo" : "ssbo", binding.buffer));
         break;
     }
     interfaces.push_back(id);
@@ -809,6 +812,20 @@ EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_written, u32 elem_shift
 };
 
 void EmitContext::DefineBuffers() {
+    const u64 uniform_mask = info.UniformBufferMask(profile, binding.uniform_buffers);
+    if (profile.force_uniform_buffers) {
+        const Id array = TypeArray(U32[1], ConstU32(NUM_BUFFERS));
+        Decorate(array, spv::Decoration::ArrayStride, 4U);
+        const Id block = TypeStruct(array);
+        Decorate(block, spv::Decoration::Block);
+        MemberDecorate(block, 0, spv::Decoration::Offset, 0U);
+        uniform_buffer_sizes = AddGlobalVariable(TypePointer(spv::StorageClass::Uniform, block),
+                                                spv::StorageClass::Uniform);
+        Decorate(uniform_buffer_sizes, spv::Decoration::Binding, 0U);
+        Decorate(uniform_buffer_sizes, spv::Decoration::DescriptorSet, 0U);
+        Name(uniform_buffer_sizes, "ubo_buffer_sizes");
+        interfaces.push_back(uniform_buffer_sizes);
+    }
     for (const auto& desc : info.buffers) {
         const auto buf_sharp = desc.GetSharp(info);
 
@@ -823,28 +840,31 @@ void EmitContext::DefineBuffers() {
 
         // Define aliases depending on the shader usage.
         auto& spv_buffer = buffers.emplace_back(binding.buffer++, desc.buffer_type);
+        const bool is_uniform = (uniform_mask >> (buffers.size() - 1)) & 1;
+        spv_buffer.is_uniform = is_uniform;
         if (True(desc.used_types & IR::Type::U64)) {
             spv_buffer.Alias(PointerType::U64) =
-                DefineBuffer(desc.is_written, 3, desc.buffer_type, U64);
+                DefineBuffer(is_uniform, desc.is_written, 3, desc.buffer_type, U64);
         }
         if (True(desc.used_types & IR::Type::U32)) {
             spv_buffer.Alias(PointerType::U32) =
-                DefineBuffer(desc.is_written, 2, desc.buffer_type, U32[1]);
+                DefineBuffer(is_uniform, desc.is_written, 2, desc.buffer_type, U32[1]);
         }
         if (True(desc.used_types & IR::Type::F32)) {
             spv_buffer.Alias(PointerType::F32) =
-                DefineBuffer(desc.is_written, 2, desc.buffer_type, F32[1]);
+                DefineBuffer(is_uniform, desc.is_written, 2, desc.buffer_type, F32[1]);
         }
         if (True(desc.used_types & IR::Type::U16)) {
             spv_buffer.Alias(PointerType::U16) =
-                DefineBuffer(desc.is_written, 1, desc.buffer_type, U16);
+                DefineBuffer(is_uniform, desc.is_written, 1, desc.buffer_type, U16);
         }
         if (True(desc.used_types & IR::Type::U8)) {
             spv_buffer.Alias(PointerType::U8) =
-                DefineBuffer(desc.is_written, 0, desc.buffer_type, U8);
+                DefineBuffer(is_uniform, desc.is_written, 0, desc.buffer_type, U8);
         }
         ++binding.unified;
     }
+    binding.uniform_buffers += std::popcount(uniform_mask);
 }
 
 spv::ImageFormat GetFormat(const AmdGpu::Image& image) {
@@ -1210,6 +1230,38 @@ Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u
                                 Id value, u32 max_index) {
     const bool store = Sirit::ValidId(value);
     const Id type = count == 1 ? scalar_type : TypeVector(scalar_type, count);
+    if (profile.force_uniform_buffers) {
+        for (const auto& buffer : buffers) {
+            if (!buffer.is_uniform) {
+                continue;
+            }
+            for (const auto& alias : buffer.aliases) {
+                if (alias.id.value != base.value) {
+                    continue;
+                }
+                ASSERT(!store);
+                const Id size_ptr = OpAccessChain(TypePointer(spv::StorageClass::Uniform, U32[1]),
+                                                 uniform_buffer_sizes, u32_zero_value,
+                                                 ConstU32(buffer.binding));
+                const Id limit =
+                    OpShiftRightLogical(U32[1], OpLoad(U32[1], size_ptr), ConstU32(shift));
+                const Id zero = scalar_type.value == U64.value ? Constant(scalar_type, u64{0})
+                                                               : Constant(scalar_type, 0U);
+                std::array<Id, 4> components{};
+                for (u32 i = 0; i < count; ++i) {
+                    const Id element = i == 0 ? index : OpIAdd(U32[1], index, ConstU32(i));
+                    const Id valid = OpULessThan(U1[1], element, limit);
+                    const Id safe_index = OpSelect(U32[1], valid, element, u32_zero_value);
+                    const Id pointer =
+                        OpAccessChain(alias.pointer_type, base, u32_zero_value, safe_index);
+                    components[i] =
+                        OpSelect(scalar_type, valid, OpLoad(scalar_type, pointer), zero);
+                }
+                return count == 1 ? components[0]
+                                  : OpCompositeConstruct(type, std::span{components}.first(count));
+            }
+        }
+    }
     if (profile.use_raw_access_chains && count > 1 &&
         max_index <= (~u32{0} >> shift) - (count - 1)) {
         const Id byte_offset = OpShiftLeftLogical(U32[1], index, ConstU32(shift));

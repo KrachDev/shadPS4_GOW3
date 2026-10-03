@@ -13,8 +13,8 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 8u;
-static constexpr u32 ShaderMetaVersion = 5u;
+static constexpr u32 ShaderBinaryVersion = 9u;
+static constexpr u32 ShaderMetaVersion = 6u;
 } // namespace Serialization
 
 namespace Vulkan {
@@ -164,7 +164,8 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
 
     it.value() =
         std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile, *pipeline_cache,
-                                          compute_key, *infos[0], modules[0], sdata, true);
+                                          compute_key, *infos[0], modules[0], sdata,
+                                          uniform_buffer_masks[0], true);
     native_pipeline_cache_dirty.store(true, std::memory_order_release);
 
     infos.fill(nullptr);
@@ -245,7 +246,8 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     }
     it.value() = std::make_unique<GraphicsPipeline>(
         instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos, infos,
-        runtime_infos, std::move(pipeline_fetch_shader), modules, sdata, true);
+        runtime_infos, std::move(pipeline_fetch_shader), modules, sdata, uniform_buffer_masks,
+        true);
     native_pipeline_cache_dirty.store(true, std::memory_order_release);
 
     infos.fill(nullptr);
@@ -305,6 +307,7 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage,
             module = CompileSPV(spv, instance.GetDevice());
         }
     }
+    uniform_buffer_masks[stage] = spec.uniform_buffer_mask;
     it_pgm.value()->InsertPermut(module, std::move(spec), perm_idx);
 
     infos[stage] = &it_pgm.value()->info;
@@ -319,7 +322,7 @@ void PipelineCache::WarmUp() {
     }
 
     auto& database = Storage::DataBase::Instance();
-    database.Open();
+    database.Open(profile.force_uniform_buffers, profile.use_raw_access_chains);
 
     const auto save_profile = [&] {
         if (!database.FinishPreload())
@@ -457,6 +460,7 @@ void StageSpecialization::Serialize(Serialization::Archive& ar) const {
     Serialization::Writer spec{ar};
 
     spec.Write(start);
+    spec.Write(uniform_buffer_mask);
     spec.Write(runtime_info);
 
     spec.Write(bitset.to_string());
@@ -479,6 +483,7 @@ bool StageSpecialization::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader spec{ar};
 
     spec.Read(start);
+    spec.Read(uniform_buffer_mask);
     spec.Read(runtime_info);
 
     std::string bits{};

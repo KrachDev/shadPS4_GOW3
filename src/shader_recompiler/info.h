@@ -16,6 +16,7 @@
 #include "shader_recompiler/ir/reg.h"
 #include "shader_recompiler/ir/type.h"
 #include "shader_recompiler/params.h"
+#include "shader_recompiler/profile.h"
 #include "shader_recompiler/resource.h"
 #include "shader_recompiler/runtime_info.h"
 
@@ -188,10 +189,42 @@ struct Info : InfoPersistent {
         }
     }
 
-    void AddBindings(Backend::Bindings& bnd) const {
+    u64 UniformBufferMask(const Profile& profile, u32 used_uniform_buffers = 0) const {
+        if (!profile.force_uniform_buffers) {
+            return 0;
+        }
+        u64 mask{};
+        u32 count{};
+        for (u32 i = 0; i < buffers.size(); ++i) {
+            const auto& desc = buffers[i];
+            const auto sharp = resolved_buffers.size() == buffers.size()
+                                   ? resolved_buffers[i]
+                                   : desc.GetSharp(*this);
+            const u64 size = desc.buffer_type == BufferType::Flatbuf
+                                 ? u64{srt_info.flattened_bufsize_dw} * sizeof(u32)
+                                 : sharp.GetSize();
+            const u64 offset = desc.buffer_type == BufferType::Guest
+                                   ? sharp.base_address & (profile.uniform_buffer_alignment - 1)
+                                   : 0;
+            if (!sharp || desc.is_written || size == 0 ||
+                size + offset > profile.max_uniform_buffer_size ||
+                (True(desc.used_types & IR::Type::U8) && !profile.supports_uniform_buffer_int8) ||
+                (True(desc.used_types & IR::Type::U16) && !profile.supports_uniform_buffer_int16) ||
+                count >= profile.max_stage_uniform_buffers ||
+                used_uniform_buffers + count >= profile.max_uniform_buffers) {
+                continue;
+            }
+            mask |= u64{1} << i;
+            ++count;
+        }
+        return mask;
+    }
+
+    void AddBindings(Backend::Bindings& bnd, u64 uniform_buffer_mask = 0) const {
         bnd.buffer += buffers.size();
         bnd.unified += buffers.size() + images.size() + samplers.size();
         bnd.user_data += ud_mask.NumRegs();
+        bnd.uniform_buffers += std::popcount(uniform_buffer_mask);
     }
 
     void RefreshFlatBuf() {

@@ -75,12 +75,14 @@ GraphicsPipeline::GraphicsPipeline(
     std::span<const Shader::Info*, MaxShaderStages> runtime_stages,
     std::span<const Shader::RuntimeInfo, MaxShaderStages> runtime_infos,
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader_,
-    std::span<const vk::ShaderModule> modules, SerializationSupport& sdata, bool preloading)
+    std::span<const vk::ShaderModule> modules, SerializationSupport& sdata,
+    std::span<const u64, MaxShaderStages> uniform_masks, bool preloading)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, key{key_},
       fetch_shader{std::move(fetch_shader_)} {
     vertex_plan_identity = next_vertex_plan_identity.fetch_add(1, std::memory_order_relaxed);
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());
+    std::ranges::copy(uniform_masks, uniform_buffer_masks.begin());
     if (fetch_shader) {
         for (const auto& attribute : fetch_shader->attributes) {
             vertex_input_plan.emplace_back(attribute);
@@ -617,7 +619,10 @@ template void GraphicsPipeline::GetVertexInputs(
 
 void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
     boost::container::small_vector<vk::DescriptorSetLayoutBinding, 32> bindings;
-    u32 binding{};
+    u32 binding = profile.force_uniform_buffers ? 1 : 0;
+    if (profile.force_uniform_buffers) {
+        bindings.push_back({0, vk::DescriptorType::eUniformBuffer, 1, AllGraphicsStageBits});
+    }
 
     for (const auto* stage : stages) {
         if (!stage) {
@@ -633,12 +638,11 @@ void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
                        stage->resolved_images.size(), stage->images.size());
         }
         for (u32 buffer_index = 0; buffer_index < stage->buffers.size(); ++buffer_index) {
-            const auto& buffer = stage->buffers[buffer_index];
-            const auto sharp =
-                preloading ? AmdGpu::Buffer{} : stage->resolved_buffers[buffer_index];
             bindings.push_back({
                 .binding = binding++,
-                .descriptorType = vk::DescriptorType::eStorageBuffer,
+                .descriptorType = (UniformBufferMask(stage->l_stage) >> buffer_index) & 1
+                                      ? vk::DescriptorType::eUniformBuffer
+                                      : vk::DescriptorType::eStorageBuffer,
                 .descriptorCount = 1,
                 .stageFlags = stage_bit,
             });

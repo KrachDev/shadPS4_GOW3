@@ -138,7 +138,8 @@ private:
     bool FilterDraw();
     bool BindSquarePass(const GraphicsPipeline& pipeline);
 
-    void PrepareBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding);
+    void PrepareBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
+                        u64 uniform_mask);
     void FinalizeBuffers(Shader::PushData& push_data, bool stream_only, u32 first_binding = 0);
     void BindTextures(const Shader::Info& stage, Shader::Backend::Bindings& binding);
     bool BindResources(const Pipeline* pipeline);
@@ -199,7 +200,7 @@ private:
         u64 topology_epoch{};
     } cached_depth_target{};
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
-    boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
+    boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS + 1> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES>
         potential_write_images;
@@ -209,6 +210,9 @@ private:
     Pipeline::DescriptorWrites partial_set_writes;
     Pipeline::BufferBarriers buffer_barriers;
     Shader::PushData push_data;
+    std::array<u32, Shader::NUM_BUFFERS> uniform_buffer_sizes{};
+    vk::DescriptorBufferInfo uniform_buffer_sizes_info{};
+    bool uniform_buffer_shaders{};
 
     struct PendingBufferBinding {
         const Shader::BufferResource* desc{};
@@ -221,6 +225,7 @@ private:
         u32 set_write_index{};
         u16 stream_index{std::numeric_limits<u16>::max()};
         VideoCore::BufferCache::StreamCopySource stream_source{};
+        bool is_uniform{};
     };
     boost::container::static_vector<PendingBufferBinding, Shader::NUM_BUFFERS>
         pending_buffer_bindings;
@@ -339,12 +344,13 @@ private:
         u64 push_descriptor_epoch{};
         boost::container::static_vector<DescriptorWriteState,
                                         Shader::NUM_BUFFERS + Shader::NUM_IMAGES +
-                                            Shader::NUM_SAMPLERS>
+                                            Shader::NUM_SAMPLERS + 1>
             writes;
         boost::container::static_vector<vk::DescriptorImageInfo,
                                         Shader::NUM_IMAGES + Shader::NUM_SAMPLERS>
             image_infos;
-        boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
+        boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS + 1>
+            buffer_infos;
         bool valid{};
     } descriptor_state;
 

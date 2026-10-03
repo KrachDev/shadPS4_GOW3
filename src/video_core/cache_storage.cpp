@@ -93,7 +93,7 @@ constexpr std::string_view GetBlobFileExtension(BlobType type) {
     return extensions[static_cast<size_t>(type)];
 }
 
-void DataBase::Open() {
+void DataBase::Open(bool use_uniform_buffers, bool use_raw_access_chains) {
     std::lock_guard lock{database_mutex};
     if (IsOpened())
         return;
@@ -101,13 +101,16 @@ void DataBase::Open() {
     const auto& game_info = Common::ElfInfo::Instance();
     using namespace Common::FS;
     archive_mode = EmulatorSettings.IsPipelineCacheArchived();
+    const auto cache_name = std::string{game_info.GameSerial()} +
+                            (use_uniform_buffers ? "_ubo_v1" : "") +
+                            (use_raw_access_chains ? "_raw_v1" : "");
 
     if (archive_mode) {
         mz_zip_zero_struct(&zip_ar);
         ar_is_writer = archive_dirty = false;
 
         cache_path = GetUserPath(PathType::CacheDir) /
-                     std::filesystem::path{game_info.GameSerial()}.replace_extension(".zip");
+                     std::filesystem::path{cache_name}.replace_extension(".zip");
         archive_work_path = cache_path.string() + ".working";
         archive_publish_path = cache_path.string() + ".publishing";
 
@@ -181,7 +184,7 @@ void DataBase::Open() {
             ar_is_writer = true;
         }
     } else {
-        cache_path = GetUserPath(PathType::CacheDir) / game_info.GameSerial();
+        cache_path = GetUserPath(PathType::CacheDir) / cache_name;
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }

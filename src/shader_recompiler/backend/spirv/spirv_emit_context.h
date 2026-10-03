@@ -331,6 +331,7 @@ public:
         BufferType buffer_type;
         std::array<Id, u32(PointerSize::NumClass)> offsets;
         std::array<BufferSpv, u32(PointerType::NumAlias)> aliases;
+        bool is_uniform{};
 
         template <class Self>
         auto& Alias(this Self& self, PointerType alias) {
@@ -354,6 +355,7 @@ public:
     size_t bda_pagetable_index{};
     size_t fault_buffer_index{};
     Id physical_pointer_type_u32;
+    Id uniform_buffer_sizes;
 
     Id sampler_type{};
     Id sampler_pointer_type{};
@@ -401,7 +403,8 @@ private:
     SpirvAttribute GetAttributeInfo(AmdGpu::NumberFormat fmt, Id id, u32 num_components,
                                     bool output, bool loaded = false, bool array = false);
 
-    BufferSpv DefineBuffer(bool is_written, u32 elem_shift, BufferType buffer_type, Id data_type);
+    BufferSpv DefineBuffer(bool is_uniform, bool is_written, u32 elem_shift,
+                          BufferType buffer_type, Id data_type);
 
     Id DefineFloat32ToUfloatM5(u32 mantissa_bits, std::string_view name);
     Id DefineUfloatM5ToFloat32(u32 mantissa_bits, std::string_view name);

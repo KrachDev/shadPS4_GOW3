@@ -93,6 +93,7 @@ void SettingsWindow::LoadSettings(std::string profile) {
         readbackLinearImagesSetting = EmulatorSettings.IsReadbackLinearImagesEnabled();
         directMemoryAccessSetting = EmulatorSettings.IsDirectMemoryAccessEnabled();
         nvRawAccessChainsSetting = EmulatorSettings.IsNvRawAccessChainsEnabled();
+        uniformBufferShadersSetting = EmulatorSettings.IsUniformBufferShadersEnabled();
         // Windows static guest red-zone protection
         windowsGuestRedZoneProtectionModeSetting =
             static_cast<int>(EmulatorSettings.GetWindowsGuestRedZoneProtectionMode());
@@ -162,6 +163,7 @@ void SettingsWindow::SaveSettings(std::string profile) {
         EmulatorSettings.SetReadbackLinearImagesEnabled(readbackLinearImagesSetting, true);
         EmulatorSettings.SetDirectMemoryAccessEnabled(directMemoryAccessSetting, true);
         EmulatorSettings.SetNvRawAccessChainsEnabled(nvRawAccessChainsSetting, true);
+        EmulatorSettings.SetUniformBufferShadersEnabled(uniformBufferShadersSetting, true);
         // Windows static guest red-zone protection
         EmulatorSettings.SetWindowsGuestRedZoneProtectionMode(
             static_cast<WindowsGuestRedZoneProtectionMode>(
@@ -798,6 +800,7 @@ void SettingsWindow::DrawSettingsTable(SettingsCategory category) {
             AddSettingCheckbox("Enable Direct Memory Access", directMemoryAccessSetting);
             AddSettingCheckbox("NVIDIA Raw Access Chains (Requires Restart)",
                                nvRawAccessChainsSetting);
+            AddSettingCheckbox("Force UBO Shaders (Requires Restart)", uniformBufferShadersSetting);
 #ifdef _WIN32
             // Windows static guest red-zone protection
             AddSettingCombo("Windows Guest Red Zone Protection (Requires Restart)",

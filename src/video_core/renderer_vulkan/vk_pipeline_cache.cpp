@@ -92,7 +92,7 @@ struct ShaderCompileResult {
 namespace {
 
 constexpr std::array<u8, 8> NativePipelineCacheMagic{'S', 'H', 'A', 'D', 'V', 'K', 'P', 'C'};
-constexpr u32 NativePipelineCacheVersion = 4;
+constexpr u32 NativePipelineCacheVersion = 5;
 constexpr u64 MaxNativePipelineCacheSize = 512ULL * 1024 * 1024;
 
 struct NativePipelineCacheHeader {
@@ -122,6 +122,7 @@ struct GraphicsPipelineBuild {
     std::array<const Shader::Info*, MaxShaderStages> runtime_stages{};
     std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    std::array<u64, MaxShaderStages> uniform_buffer_masks{};
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader;
 
     [[nodiscard]] std::array<const Shader::Info*, MaxShaderStages> BindCompileStages() {
@@ -645,12 +646,13 @@ void AddBindingMask(SpecializationFingerprintBuilder& builder,
 void AddBindingStart(SpecializationFingerprintBuilder& builder,
                      const Shader::Backend::Bindings& start) noexcept {
     builder.Add(start.unified | (static_cast<u64>(start.buffer) << 32));
-    builder.Add(start.user_data);
+    builder.Add(start.user_data | (static_cast<u64>(start.uniform_buffers) << 32));
 }
 
 [[nodiscard]] SHAD_NO_INLINE u64 BuildStoredSpecializationFingerprint(
     const Shader::StageSpecialization& specialization) noexcept {
     SpecializationFingerprintBuilder builder{};
+    builder.Add(specialization.uniform_buffer_mask);
     builder.Add(specialization.vs_attribs.size());
     builder.Add(specialization.buffers.size());
     builder.Add(specialization.images.size());
@@ -685,8 +687,10 @@ void AddBindingStart(SpecializationFingerprintBuilder& builder,
 [[nodiscard]] SHAD_NO_INLINE u64 BuildCurrentSpecializationFingerprint(
     const Shader::Info& info, const Shader::RuntimeInfo& runtime_info,
     const Shader::Backend::Bindings& start,
-    const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader) noexcept {
+    const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader,
+    const Shader::Profile& profile) noexcept {
     SpecializationFingerprintBuilder builder{};
+    builder.Add(info.UniformBufferMask(profile, start.uniform_buffers));
     const bool has_vertex_attributes =
         info.stage == Stage::Vertex && fetch_shader && fetch_shader->has_value();
     const size_t vertex_attribute_count =
@@ -753,7 +757,11 @@ void AddBindingStart(SpecializationFingerprintBuilder& builder,
 [[nodiscard]] SHAD_NO_INLINE bool MatchesCurrentSpecialization(
     const Shader::StageSpecialization& candidate, const Shader::Info& info,
     const Shader::RuntimeInfo& runtime_info, const Shader::Backend::Bindings& start,
-    const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader) noexcept {
+    const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader,
+    const Shader::Profile& profile) noexcept {
+    if (candidate.uniform_buffer_mask != info.UniformBufferMask(profile, start.uniform_buffers)) {
+        return false;
+    }
     if (!candidate.Valid() || candidate.runtime_info != runtime_info || !fetch_shader) {
         return false;
     }
@@ -849,9 +857,9 @@ void AddBindingStart(SpecializationFingerprintBuilder& builder,
     Program& program, const Shader::Info& info, const Shader::RuntimeInfo& runtime_info,
     const Shader::Backend::Bindings& start,
     const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader,
-    size_t excluded_permutation) noexcept {
+    size_t excluded_permutation, const Shader::Profile& profile) noexcept {
     const u64 fingerprint =
-        BuildCurrentSpecializationFingerprint(info, runtime_info, start, fetch_shader);
+        BuildCurrentSpecializationFingerprint(info, runtime_info, start, fetch_shader, profile);
     for (size_t permutation = 0; permutation < program.modules.size(); ++permutation) {
         if (permutation == excluded_permutation) {
             continue;
@@ -866,7 +874,8 @@ void AddBindingStart(SpecializationFingerprintBuilder& builder,
         if (module.specialization_fingerprint != fingerprint) {
             continue;
         }
-        if (MatchesCurrentSpecialization(module.spec, info, runtime_info, start, fetch_shader)) {
+        if (MatchesCurrentSpecialization(module.spec, info, runtime_info, start, fetch_shader,
+                                         profile)) {
             return permutation;
         }
     }
@@ -914,8 +923,11 @@ void AddBindingStart(SpecializationFingerprintBuilder& builder,
 /// same order.
 void BuildSpecializationShapeKeys(const Shader::Info& info,
                                   const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader,
-                                  Program::SpecializationShape::Keys& keys) {
+                                  Program::SpecializationShape::Keys& keys,
+                                  const Shader::Profile& profile,
+                                  const Shader::Backend::Bindings& start) {
     keys.clear();
+    keys.push_back(info.UniformBufferMask(profile, start.uniform_buffers));
     if (info.stage == Stage::Vertex && fetch_shader && fetch_shader->has_value()) {
         for (const auto& sharp : info.resolved_vertex_buffers) {
             keys.push_back(BufferShapeKey(sharp));
@@ -978,8 +990,9 @@ void RecordSpecializationShape(Program& program, size_t permutation, u64 fetch_s
 [[nodiscard]] SHAD_NO_INLINE bool VerifyShapeMatch(
     const Shader::StageSpecialization& candidate, const Shader::Info& info,
     const Shader::RuntimeInfo& runtime_info, const Shader::Backend::Bindings& start,
-    const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader) {
-    if (MatchesCurrentSpecialization(candidate, info, runtime_info, start, fetch_shader)) {
+    const std::optional<Shader::Gcn::FetchShaderData>* fetch_shader,
+    const Shader::Profile& profile) {
+    if (MatchesCurrentSpecialization(candidate, info, runtime_info, start, fetch_shader, profile)) {
         return true;
     }
     static std::atomic<u32> reports{0};
@@ -1061,7 +1074,7 @@ struct PipelineCache::OptimizationState {
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
     PipelineCache& cache) {
     const u32 expected_active_mask = graphics_dependency.active_mask;
-    Shader::Backend::Bindings binding{};
+    Shader::Backend::Bindings binding{.unified = cache.profile.force_uniform_buffers ? 1U : 0U};
     for (u32 logical_index = 0; logical_index < MaxShaderStages; ++logical_index) {
         if (((expected_active_mask >> logical_index) & 1U) == 0) {
             continue;
@@ -1109,14 +1122,16 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
         if (resolve_resources) {
             ResolveStageResources(info, cached_fetch_shader.parsed, program.resolved_resources);
             auto& keys = cache.specialization_shape_keys;
-            BuildSpecializationShapeKeys(info, cached_fetch_shader.parsed, keys);
+            BuildSpecializationShapeKeys(info, cached_fetch_shader.parsed, keys, cache.profile,
+                                         binding);
             const auto& expected = program.specialization_shape.keys;
             if (expected.size() != keys.size() ||
                 std::memcmp(expected.data(), keys.data(), keys.size() * sizeof(u64)) != 0) {
                 return false;
             }
         }
-        info.AddBindings(binding);
+        info.AddBindings(binding,
+                         program.modules[program.current_permutation].spec.uniform_buffer_mask);
     }
     return true;
 }
@@ -1409,7 +1424,7 @@ std::vector<u8> PipelineCache::LoadNativePipelineCache() {
         return {};
     }
     auto& database = Storage::DataBase::Instance();
-    database.Open();
+    database.Open(profile.force_uniform_buffers, profile.use_raw_access_chains);
     std::vector<u8> blob;
     database.Load(Storage::BlobType::NativePipelineCache, std::string{NativePipelineCacheName},
                   blob);
@@ -1658,11 +1673,20 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                                       instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
                               instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
-        .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
+        .needs_buffer_offsets = instance.StorageMinAlignment() > 4 ||
+                                (instance.UsesUniformBufferShaders() &&
+                                 instance.UniformMinAlignment() > 4),
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
         .supports_shader_stencil_export = instance_.IsShaderStencilExportSupported(),
         .use_raw_access_chains = instance_.UsesRawAccessChains(),
+        .force_uniform_buffers = instance_.UsesUniformBufferShaders(),
+        .supports_uniform_buffer_int8 = instance_.SupportsUniformBufferInt8(),
+        .supports_uniform_buffer_int16 = instance_.SupportsUniformBufferInt16(),
+        .max_uniform_buffer_size = instance_.GetLimits().maxUniformBufferRange,
+        .uniform_buffer_alignment = static_cast<u32>(instance_.UniformMinAlignment()),
+        .max_stage_uniform_buffers = instance_.GetLimits().maxPerStageDescriptorUniformBuffers - 1,
+        .max_uniform_buffers = instance_.GetLimits().maxDescriptorSetUniformBuffers - 1,
     };
     const auto initial_data = LoadNativePipelineCache();
     const vk::PipelineCacheCreateInfo cache_info{
@@ -1749,6 +1773,7 @@ SHAD_NO_INLINE const GraphicsPipeline* PipelineCache::CreateGraphicsPipeline() {
     build->key = graphics_key;
     std::ranges::copy(runtime_infos, build->runtime_infos.begin());
     std::ranges::copy(modules, build->modules.begin());
+    build->uniform_buffer_masks = uniform_buffer_masks;
     if (fetch_shader && fetch_shader->has_value()) {
         build->fetch_shader.emplace(fetch_shader->value());
     }
@@ -1782,7 +1807,8 @@ SHAD_NO_INLINE const GraphicsPipeline* PipelineCache::CreateGraphicsPipeline() {
             auto pipeline = std::make_unique<GraphicsPipeline>(
                 instance, scheduler, desc_heap, profile, build->key, *pipeline_cache,
                 compile_stages, build->runtime_stages, build->runtime_infos,
-                std::move(build->fetch_shader), build->modules, sdata, false);
+                std::move(build->fetch_shader), build->modules, sdata, build->uniform_buffer_masks,
+                false);
             RegisterPipelineData(build->key, pipeline_hash, sdata);
             native_pipeline_cache_dirty.store(true, std::memory_order_release);
             const u32 updates =
@@ -1834,7 +1860,8 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         ComputePipeline::SerializationSupport sdata{};
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *infos[0],
-                                                       modules[0], sdata, false);
+                                                       modules[0], sdata, uniform_buffer_masks[0],
+                                                       false);
         RegisterPipelineData(compute_key, sdata);
         native_pipeline_cache_dirty.store(true, std::memory_order_release);
         const u32 updates =
@@ -1959,7 +1986,7 @@ bool PipelineCache::RefreshGraphicsStages() {
         Pending,
     };
 
-    Shader::Backend::Bindings binding{};
+    Shader::Backend::Bindings binding{.unified = profile.force_uniform_buffers ? 1U : 0U};
     const auto bind_stage = [&](Shader::Stage stage_in,
                                 Shader::LogicalStage stage_out) -> BindResult {
         const auto stage_in_idx = static_cast<u32>(stage_in);
@@ -1990,7 +2017,7 @@ bool PipelineCache::RefreshGraphicsStages() {
         }
         const FetchShader* fetch_shader_{};
         std::tie(infos[stage_out_idx], modules[stage_out_idx], fetch_shader_,
-                 key.stage_hashes[stage_out_idx]) =
+                 key.stage_hashes[stage_out_idx], uniform_buffer_masks[stage_out_idx]) =
             *result;
         if (fetch_shader_ && fetch_shader_->has_value()) {
             fetch_shader = fetch_shader_;
@@ -2098,13 +2125,13 @@ bool PipelineCache::RefreshGraphicsStages() {
 }
 
 bool PipelineCache::RefreshComputeKey() {
-    Shader::Backend::Bindings binding{};
+    Shader::Backend::Bindings binding{.unified = profile.force_uniform_buffers ? 1U : 0U};
     const auto& cs_pgm = liverpool->GetCsRegs();
     const auto cs_params = AmdGpu::GetParams(cs_pgm);
     const auto result =
         GetProgram(Shader::Stage::Compute, LogicalStage::Compute, cs_params, binding);
     ASSERT(result.has_value());
-    std::tie(infos[0], modules[0], fetch_shader, compute_key.value) =
+    std::tie(infos[0], modules[0], fetch_shader, compute_key.value, uniform_buffer_masks[0]) =
         *result;
     return true;
 }
@@ -2367,7 +2394,7 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
     if (fetch_shader_usable && IsSpecializationMatchable(program)) {
         const size_t current_permutation = program.current_permutation;
         auto& shape_keys = specialization_shape_keys;
-        BuildSpecializationShapeKeys(info, cached_fetch_shader.parsed, shape_keys);
+        BuildSpecializationShapeKeys(info, cached_fetch_shader.parsed, shape_keys, profile, start);
         if (current_permutation < program.modules.size()) [[likely]] {
             auto& module = program.modules[current_permutation];
             bool current_matches;
@@ -2379,11 +2406,12 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
                 if (current_matches) [[likely]] {
                     if (VerifySpecializationShapes()) [[unlikely]] {
                         current_matches = VerifyShapeMatch(module.spec, info, runtime_info, start,
-                                                           cached_fetch_shader.parsed);
+                                                           cached_fetch_shader.parsed, profile);
                     }
                 } else {
                     current_matches = MatchesCurrentSpecialization(
-                        module.spec, info, runtime_info, start, cached_fetch_shader.parsed);
+                        module.spec, info, runtime_info, start, cached_fetch_shader.parsed,
+                        profile);
                     if (current_matches) {
                         RecordSpecializationShape(program, current_permutation,
                                                   cached_fetch_shader.revision, start,
@@ -2392,7 +2420,7 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
                 }
             }
             if (current_matches) [[likely]] {
-                info.AddBindings(binding);
+                info.AddBindings(binding, module.spec.uniform_buffer_mask);
                 current_stage = {
                     .program = &program,
                     .program_base = params.Base(),
@@ -2400,21 +2428,23 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
                     .stage = stage,
                 };
                 return Result{&info, module.module, cached_fetch_shader.parsed,
-                              HashCombine(params.hash, current_permutation)};
+                              HashCombine(params.hash, current_permutation),
+                              module.spec.uniform_buffer_mask};
             }
         }
 
         size_t permutation;
         {
             permutation = FindCachedPermutation(program, info, runtime_info, start,
-                                                cached_fetch_shader.parsed, current_permutation);
+                                                cached_fetch_shader.parsed, current_permutation,
+                                                profile);
         }
         if (permutation != Program::InvalidPermutation) {
             auto& module = program.modules[permutation];
             program.current_permutation = permutation;
             RecordSpecializationShape(program, permutation, cached_fetch_shader.revision, start,
                                       runtime_info, shape_keys);
-            info.AddBindings(binding);
+            info.AddBindings(binding, module.spec.uniform_buffer_mask);
             current_stage = {
                 .program = &program,
                 .program_base = params.Base(),
@@ -2422,7 +2452,7 @@ std::optional<PipelineCache::Result> PipelineCache::GetProgram(
                 .stage = stage,
             };
             return Result{&info, module.module, cached_fetch_shader.parsed,
-                          HashCombine(params.hash, permutation)};
+                          HashCombine(params.hash, permutation), module.spec.uniform_buffer_mask};
         }
     }
 
@@ -2464,13 +2494,14 @@ SHAD_NO_INLINE std::optional<PipelineCache::Result> PipelineCache::GetProgramSlo
         module = CompilePermutation(program, stage, l_stage, params, runtime_info, binding,
                                     std::move(spec), perm_idx, perm_hash);
     } else {
-        info.AddBindings(binding);
+        info.AddBindings(binding, it->spec.uniform_buffer_mask);
         module = it->module;
         perm_idx = std::distance(program.modules.begin(), it);
         perm_hash = HashCombine(params.hash, perm_idx);
     }
     program.current_permutation = perm_idx;
-    return Result{&program.info, module, fetch_shader_, perm_hash};
+    return Result{&program.info, module, fetch_shader_, perm_hash,
+                  program.modules[perm_idx].spec.uniform_buffer_mask};
 }
 
 SHAD_NO_INLINE std::optional<PipelineCache::Result> PipelineCache::CreateProgram(
@@ -2503,7 +2534,8 @@ SHAD_NO_INLINE std::optional<PipelineCache::Result> PipelineCache::CreateProgram
     program.modules[0].specialization_fingerprint =
         BuildStoredSpecializationFingerprint(program.modules[0].spec);
     program.current_permutation = 0;
-    return Result{&program.info, module, cached_fetch_shader.parsed, perm_hash};
+    return Result{&program.info, module, cached_fetch_shader.parsed, perm_hash,
+                  program.modules[0].spec.uniform_buffer_mask};
 }
 
 SHAD_NO_INLINE vk::ShaderModule PipelineCache::CompilePermutation(
@@ -2578,7 +2610,8 @@ void PipelineCache::DumpShader(std::span<const u32> code, u64 hash, Shader::Stag
     }
 
     using namespace Common::FS;
-    const auto dump_dir = GetUserPath(PathType::ShaderDir) / "dumps";
+    const auto dump_dir = GetUserPath(PathType::ShaderDir) /
+                          (profile.force_uniform_buffers ? "dumps_ubo" : "dumps");
     if (!std::filesystem::exists(dump_dir)) {
         std::filesystem::create_directories(dump_dir);
     }
@@ -2592,7 +2625,8 @@ std::optional<std::vector<u32>> PipelineCache::GetShaderPatch(u64 hash, Shader::
                                                               std::string_view ext) {
 
     using namespace Common::FS;
-    const auto patch_dir = GetUserPath(PathType::ShaderDir) / "patch";
+    const auto patch_dir = GetUserPath(PathType::ShaderDir) /
+                           (profile.force_uniform_buffers ? "patch_ubo" : "patch");
     if (!std::filesystem::exists(patch_dir)) {
         std::filesystem::create_directories(patch_dir);
     }

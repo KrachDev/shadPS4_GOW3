@@ -1124,6 +1124,12 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     buffer_cache.BeginStreamCopyBatch();
     set_write_index = 0;
     set_writes.clear();
+    uniform_buffer_shaders = pipeline->UsesUniformBufferShaders();
+    if (uniform_buffer_shaders) {
+        uniform_buffer_sizes.fill(0);
+        set_writes.resize(1);
+        set_write_index = 1;
+    }
     buffer_barriers.clear();
     buffer_infos.clear();
     image_infos.clear();
@@ -1134,7 +1140,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     bool uses_dma = false;
 
     // Bind resource buffers and textures.
-    Shader::Backend::Bindings binding{};
+    Shader::Backend::Bindings binding{.unified = uniform_buffer_shaders ? 1U : 0U};
     {
         push_data = MakeUserData(liverpool->regs);
     }
@@ -1149,7 +1155,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         }
         {
             const u32 first_binding = static_cast<u32>(pending_buffer_bindings.size());
-            PrepareBuffers(*stage, binding);
+            PrepareBuffers(*stage, binding, pipeline->UniformBufferMask(stage->l_stage));
             FinalizeBuffers(push_data, false, first_binding);
         }
         {
@@ -1488,7 +1494,8 @@ SHAD_NOINLINE bool Rasterizer::IsComputeImageClear(const Pipeline* pipeline) {
     return true;
 }
 
-void Rasterizer::PrepareBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding) {
+void Rasterizer::PrepareBuffers(const Shader::Info& stage, Shader::Backend::Bindings& binding,
+                               u64 uniform_mask) {
     const u32 stage_index = static_cast<u32>(stage.l_stage);
     ASSERT(stage_index < MaxShaderStages);
     ASSERT(pending_buffer_bindings.size() + stage.buffers.size() <= Shader::NUM_BUFFERS);
@@ -1496,7 +1503,9 @@ void Rasterizer::PrepareBuffers(const Shader::Info& stage, Shader::Backend::Bind
     for (u32 i = 0; i < stage.buffers.size(); ++i) {
         const auto& desc = stage.buffers[i];
         const auto vsharp = GetResolvedBuffer(stage, i);
-        const u64 alignment = instance.StorageMinAlignment();
+        const bool is_uniform = (uniform_mask >> i) & 1;
+        const u64 alignment =
+            is_uniform ? instance.UniformMinAlignment() : instance.StorageMinAlignment();
 
         auto& pending = pending_buffer_bindings.emplace_back(PendingBufferBinding{
             .desc = &desc,
@@ -1505,6 +1514,7 @@ void Rasterizer::PrepareBuffers(const Shader::Info& stage, Shader::Backend::Bind
             .unified_binding = binding.unified++,
             .buffer_binding = binding.buffer++,
             .set_write_index = set_write_index++,
+            .is_uniform = is_uniform,
         });
 
         if (!desc.IsSpecial() && vsharp.base_address != 0 && vsharp.GetSize() > 0) {
@@ -1591,8 +1601,15 @@ void Rasterizer::WriteBufferDescriptor(const PendingBufferBinding& pending) {
     set_write.dstBinding = pending.unified_binding;
     set_write.dstArrayElement = 0;
     set_write.descriptorCount = 1;
-    set_write.descriptorType = vk::DescriptorType::eStorageBuffer;
+    set_write.descriptorType = pending.is_uniform ? vk::DescriptorType::eUniformBuffer
+                                                 : vk::DescriptorType::eStorageBuffer;
     set_write.pBufferInfo = &buffer_infos.back();
+    if (pending.is_uniform) {
+        const auto& info = buffer_infos.back();
+        ASSERT(!info.buffer || info.range <= instance.GetLimits().maxUniformBufferRange);
+        uniform_buffer_sizes[pending.buffer_binding] =
+            info.buffer ? static_cast<u32>(info.range) : 0;
+    }
 }
 
 SHAD_NO_INLINE void Rasterizer::FinalizeCachedBuffer(Shader::PushData& push_data,
@@ -1642,7 +1659,8 @@ SHAD_NO_INLINE void Rasterizer::FinalizeCachedBuffer(Shader::PushData& push_data
         buffer_infos.emplace_back(vk_buffer->Handle(), offset_aligned, pending.size + adjust);
         const vk::AccessFlags2 shader_access =
             desc.is_written ? vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite
-                            : vk::AccessFlagBits2::eShaderRead;
+                            : pending.is_uniform ? vk::AccessFlagBits2::eUniformRead
+                                                 : vk::AccessFlagBits2::eShaderRead;
         if (auto barrier =
                 vk_buffer->GetBarrier(shader_access, vk::PipelineStageFlagBits2::eAllCommands)) {
             buffer_barriers.emplace_back(*barrier);
@@ -1669,9 +1687,10 @@ void Rasterizer::FinalizeBuffers(Shader::PushData& push_data, bool stream_only, 
                 push_data.AddOffset(pending.buffer_binding, adjust);
                 buffer_infos.emplace_back(result.buffer->Handle(), offset_aligned,
                                           pending.size + adjust);
-                if (auto barrier =
-                        result.buffer->GetBarrier(vk::AccessFlagBits2::eShaderRead,
-                                                  vk::PipelineStageFlagBits2::eAllCommands)) {
+                const auto access = pending.is_uniform ? vk::AccessFlagBits2::eUniformRead
+                                                       : vk::AccessFlagBits2::eShaderRead;
+                if (auto barrier = result.buffer->GetBarrier(
+                        access, vk::PipelineStageFlagBits2::eAllCommands)) {
                     buffer_barriers.emplace_back(*barrier);
                 }
             } else {
@@ -1687,6 +1706,23 @@ void Rasterizer::FinalizeBuffers(Shader::PushData& push_data, bool stream_only, 
                 finalize_stream(pending);
             } else {
                 FinalizeCachedBuffer(push_data, pending);
+            }
+        }
+        if (uniform_buffer_shaders) {
+            auto& buffer = buffer_cache.GetUtilityBuffer(VideoCore::MemoryUsage::Stream);
+            const u64 offset =
+                buffer.Copy(uniform_buffer_sizes.data(), sizeof(uniform_buffer_sizes),
+                            instance.UniformMinAlignment());
+            uniform_buffer_sizes_info = {buffer.Handle(), offset, sizeof(uniform_buffer_sizes)};
+            set_writes[0] = {
+                .dstBinding = 0,
+                .descriptorCount = 1,
+                .descriptorType = vk::DescriptorType::eUniformBuffer,
+                .pBufferInfo = &uniform_buffer_sizes_info,
+            };
+            if (auto barrier = buffer.GetBarrier(vk::AccessFlagBits2::eUniformRead,
+                                                vk::PipelineStageFlagBits2::eAllCommands)) {
+                buffer_barriers.emplace_back(*barrier);
             }
         }
     } else {

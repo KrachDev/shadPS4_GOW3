@@ -142,7 +142,7 @@ struct ShaderProgramHash {
 class PipelineCache {
 public:
     using FetchShader = std::optional<Shader::Gcn::FetchShaderData>;
-    using Result = std::tuple<const Shader::Info*, vk::ShaderModule, const FetchShader*, u64>;
+    using Result = std::tuple<const Shader::Info*, vk::ShaderModule, const FetchShader*, u64, u64>;
 
     explicit PipelineCache(const Instance& instance, Scheduler& scheduler,
                            AmdGpu::Liverpool* liverpool);
@@ -255,6 +255,7 @@ private:
     std::array<Shader::RuntimeInfo, MaxShaderStages> runtime_infos{};
     std::array<const Shader::Info*, MaxShaderStages> infos{};
     std::array<vk::ShaderModule, MaxShaderStages> modules{};
+    std::array<u64, MaxShaderStages> uniform_buffer_masks{};
     const FetchShader* fetch_shader{};
     GraphicsPipelineKey graphics_key{};
     ComputePipelineKey compute_key{};

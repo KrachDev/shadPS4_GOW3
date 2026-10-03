@@ -28,7 +28,7 @@ public:
         return *Common::Singleton<DataBase>::Instance();
     }
 
-    void Open();
+    void Open(bool use_uniform_buffers = false, bool use_raw_access_chains = false);
     void Close();
     [[nodiscard]] bool Reset();
     [[nodiscard]] bool IsOpened() const {

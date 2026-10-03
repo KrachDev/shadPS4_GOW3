@@ -162,6 +162,7 @@ private:
     bool readbackLinearImagesSetting;
     bool directMemoryAccessSetting;
     bool nvRawAccessChainsSetting;
+    bool uniformBufferShadersSetting;
     // Windows static guest red-zone protection
     int windowsGuestRedZoneProtectionModeSetting;
     bool devkitConsoleSetting;

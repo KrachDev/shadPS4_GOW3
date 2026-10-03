@@ -282,6 +282,20 @@ bool Instance::CreateDevice() {
         add_extension(VK_NV_RAW_ACCESS_CHAINS_EXTENSION_NAME);
     LOG_INFO(Render_Vulkan, "NVIDIA raw access chains: requested={}, active={}",
              EmulatorSettings.IsNvRawAccessChainsEnabled(), nv_raw_access_chains);
+    const auto& limits = properties.limits;
+    const bool uniform_layout =
+        feature_chain.get<vk::PhysicalDeviceVulkan12Features>().uniformBufferStandardLayout;
+    uniform_buffer_shaders = EmulatorSettings.IsUniformBufferShadersEnabled() && uniform_layout &&
+                             limits.minUniformBufferOffsetAlignment <= 256 &&
+                             limits.maxUniformBufferRange >
+                                 limits.minUniformBufferOffsetAlignment &&
+                             limits.maxPerStageDescriptorUniformBuffers > 1 &&
+                             limits.maxDescriptorSetUniformBuffers > 1;
+    uniform_buffer_int16 =
+        feature_chain.get<vk::PhysicalDeviceVulkan11Features>().uniformAndStorageBuffer16BitAccess;
+    LOG_INFO(Render_Vulkan, "UBO shaders: requested={}, active={}, max range={}, alignment={}",
+             EmulatorSettings.IsUniformBufferShadersEnabled(), uniform_buffer_shaders,
+             limits.maxUniformBufferRange, limits.minUniformBufferOffsetAlignment);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
     attachment_feedback_loop = add_extension(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
     if (attachment_feedback_loop) {
@@ -495,12 +509,16 @@ bool Instance::CreateDevice() {
         },
         vk::PhysicalDeviceVulkan11Features{
             .storageBuffer16BitAccess = vk11_features.storageBuffer16BitAccess,
+            .uniformAndStorageBuffer16BitAccess =
+                uniform_buffer_shaders && vk11_features.uniformAndStorageBuffer16BitAccess,
             .shaderDrawParameters = vk11_features.shaderDrawParameters,
         },
         vk::PhysicalDeviceVulkan12Features{
             .samplerMirrorClampToEdge = vk12_features.samplerMirrorClampToEdge,
             .drawIndirectCount = vk12_features.drawIndirectCount,
             .storageBuffer8BitAccess = vk12_features.storageBuffer8BitAccess,
+            .uniformAndStorageBuffer8BitAccess =
+                uniform_buffer_shaders && vk12_features.uniformAndStorageBuffer8BitAccess,
             .shaderBufferInt64Atomics = vk12_features.shaderBufferInt64Atomics,
             .shaderSharedInt64Atomics = vk12_features.shaderSharedInt64Atomics,
             .shaderFloat16 = vk12_features.shaderFloat16,
