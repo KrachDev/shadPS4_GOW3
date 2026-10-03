@@ -272,6 +272,12 @@ For a fresh install:
    Enable either the texture fix or one resolution patch, never both. The resolution
    patches already include more video memory.
 
+   > [!IMPORTANT]
+   > The texture fix gives the game more video memory, so the emulator must reserve
+   > more memory too: set **Additional DMem Allocation** to 2048 or more (next step).
+   > Without it, the game crashes. Each resolution patch states its own value in its
+   > description.
+
 ### 5. Set up God of War III
 
 Right-click the game and choose **Game-specific Settings... → Configure Game-specific
@@ -281,6 +287,7 @@ Settings**. Settings made there apply to this game only.
 |---|---|---|---|
 | Graphics | Present Mode | Mailbox | Lowest lag at 120 FPS |
 | Graphics | Enable NVIDIA Reflex | On (NVIDIA only) | Shorter frame queue |
+| Experimental | Additional DMem Allocation | 2048 | Required by the texture fix; without it the game crashes |
 | Experimental | Vblank Frequency | 120 | Required by the 120 FPS patch |
 | Experimental | Readbacks Mode | Disabled | The fast path replaces it |
 | Experimental | Enable Readback Linear Images | On | Turns on the God of War III fast path |
@@ -349,6 +356,9 @@ own.
   - Check the log: right-click the game, then **Open Folder... → Open Log Folder**.
   - An error about an illegal instruction means your processor lacks an instruction the
     release uses. [Build it yourself](#building-it-yourself) for your own CPU.
+- **God of War III crashes during gameplay.**
+  - Check that **Additional DMem Allocation** is 2048 or more with the texture fix, or
+    the value in the description of your resolution patch.
 - **God of War III textures are still corrupted.**
   - Check that **Bug Fix - Texture Corruption Fix** is enabled.
   - Check that your game is CUSA01715 with update 01.02.
