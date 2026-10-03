@@ -328,13 +328,40 @@ static inline std::span<const u32> NextPacket(std::span<const u32> span, size_t 
     return InvalidNextPacket(span, offset);
 }
 
-static SHAD_NO_INLINE std::span<const u32> NextNonType3Packet(std::span<const u32> dcb, u32 type) {
+static SHAD_NO_INLINE std::span<const u32> NextNonType3Packet(std::span<const u32> dcb, u32 type, Regs& regs) {
     const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
     switch (type) {
-    case 0:
-        UNREACHABLE_MSG("Unimplemented PM4 type 0, base reg: {}, size: {}",
-                        header->type0.base.Value(), header->type0.NumWords());
-    case 2:
+    case 0: {
+        const u32 base = header->type0.base.Value();
+        const u32 num_words = header->type0.NumWords();
+        const u32 total_packet_dwords = 1 + num_words;
+    
+        if (dcb.size() < total_packet_dwords) {
+            LOG_ERROR(Render, "PM4 Type 0: Truncated packet. Available: {}, required: {}",
+                      dcb.size(), total_packet_dwords);
+            return {};
+        }
+    
+        const u32* payload = dcb.data() + 1;
+    
+        if (base < Regs::NumRegs) {
+            const u32 words_to_copy = std::min(num_words, Regs::NumRegs - base);
+            std::memcpy(&regs.reg_array[base], payload, words_to_copy * sizeof(u32));
+    
+            if (words_to_copy < num_words) {
+                LOG_WARNING(
+                    Render,
+                    "PM4 Type 0: Register write truncated! base={:#x}, count={}, max={}", base,
+                    num_words, Regs::NumRegs);
+            }
+        } else {
+            LOG_WARNING(Render, "PM4 Type 0: Out of bounds base register {:#x} (max is {:#x})",
+                        base, Regs::NumRegs);
+        }
+    
+        return NextPacket(dcb, total_packet_dwords);
+    }
+        case 2:
         // Type-2 packets are used for padding purposes
         return NextPacket(dcb, 1);
     default:
@@ -1327,7 +1354,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         const u32 type = header_raw >> 30;
 
         if (type != 3) [[unlikely]] {
-            dcb = NextNonType3Packet(dcb, type);
+            dcb = NextNonType3Packet(dcb, type, regs);
             continue;
         }
 
@@ -2056,12 +2083,13 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid, u3
         }
 
         auto* header = reinterpret_cast<const PM4Header*>(acb.data());
-        u32 next_dw_off = header->type3.NumWords() + 1;
+        u32 next_dw_off = (header->type == 2) ? 1 : (header->type3.NumWords() + 1);
 
         // If we have a buffered packet, use it.
         if (queue.tmp_dwords > 0) [[unlikely]] {
             header = reinterpret_cast<const PM4Header*>(queue.tmp_packet.data());
-            next_dw_off = header->type3.NumWords() + 1 - queue.tmp_dwords;
+            next_dw_off =
+                ((header->type == 2) ? 1 : (header->type3.NumWords() + 1)) - queue.tmp_dwords;
             std::memcpy(queue.tmp_packet.data() + queue.tmp_dwords, acb.data(),
                         next_dw_off * sizeof(u32));
             queue.tmp_dwords = 0;
@@ -2078,6 +2106,36 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid, u3
                 *queue.read_addr &= queue.ring_size_dw - 1;
             }
             break;
+        }
+
+        if (header->type == 0) {
+            const u32 base = header->type0.base.Value();
+            const u32 num_words = header->type0.NumWords();
+            const u32 total_packet_dwords = 1 + num_words;
+            const u32* payload = reinterpret_cast<const u32*>(header + 1);
+
+            if (base < Regs::NumRegs) {
+                const u32 words_to_copy = std::min(num_words, Regs::NumRegs - base);
+                std::memcpy(&regs.reg_array[base], payload, words_to_copy * sizeof(u32));
+
+                if (words_to_copy < num_words) {
+                    LOG_WARNING(
+                        Render,
+                        "PM4 Type 0 (ACB): Register write truncated! base={:#x}, count={}, max={}",
+                        base, num_words, Regs::NumRegs);
+                }
+            } else {
+                LOG_WARNING(Render,
+                            "PM4 Type 0 (ACB): Out of bounds base register {:#x} (max is {:#x})",
+                            base, Regs::NumRegs);
+            }
+
+            acb = NextPacket(acb, total_packet_dwords);
+            if constexpr (!is_indirect) {
+                *queue.read_addr += total_packet_dwords;
+                *queue.read_addr %= queue.ring_size_dw;
+            }
+            continue;
         }
 
         if (header->type == 2) {
