@@ -234,7 +234,6 @@ vk::ShaderModule Compile(const HostShaders::ShaderSource& source, vk::ShaderStag
     const auto permutation = GetPermutation(defines);
     if (EmulatorSettings.IsPipelineCacheEnabled()) {
         if (auto spirv = GetHostShaderCache().Load(source.name, generation, permutation)) {
-            LOG_INFO(Render_Vulkan, "Loaded host shader {} from cache", source.name);
             return CompileSPV(*spirv, device);
         }
     }

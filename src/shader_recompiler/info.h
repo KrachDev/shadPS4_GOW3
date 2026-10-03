@@ -203,10 +203,18 @@ struct Info : InfoPersistent {
             const u64 size = desc.buffer_type == BufferType::Flatbuf
                                  ? u64{srt_info.flattened_bufsize_dw} * sizeof(u32)
                                  : sharp.GetSize();
-            const u64 offset = desc.buffer_type == BufferType::Guest
-                                   ? sharp.base_address & (profile.uniform_buffer_alignment - 1)
-                                   : 0;
-            if (!sharp || desc.is_written || size == 0 ||
+            const bool is_guest = desc.buffer_type == BufferType::Guest;
+            const u64 offset =
+                is_guest ? sharp.base_address & (profile.uniform_buffer_alignment - 1) : 0;
+            // NVIDIA serializes divergent uniform buffer reads; only lane-uniform reads gain.
+            // Guest reads past the range must return zero, which robustness guarantees only at
+            // its granularity. Flattened constants and clip planes are read within bounds.
+            const bool uniform_access =
+                desc.buffer_type == BufferType::Flatbuf ||
+                desc.buffer_type == BufferType::ClipPlanes ||
+                (is_guest && !desc.is_divergent_read &&
+                 ((size + offset) & (profile.robust_uniform_buffer_alignment - 1)) == 0);
+            if (!sharp || !uniform_access || desc.is_written || size == 0 ||
                 size + offset > profile.max_uniform_buffer_size ||
                 (True(desc.used_types & IR::Type::U8) && !profile.supports_uniform_buffer_int8) ||
                 (True(desc.used_types & IR::Type::U16) && !profile.supports_uniform_buffer_int16) ||

@@ -54,4 +54,4 @@ void CoalesceBufferLoadsPass(IR::Program& program) {
     }
 }
 
-}
+} // namespace Shader::Optimization

@@ -56,7 +56,11 @@ void GpuAuthorityTracker::SetRasterizer(Vulkan::Rasterizer* rasterizer_) noexcep
 }
 
 SHAD_NO_INLINE bool GpuAuthorityTracker::ResolveGow3FastpathActive() const noexcept {
-    const bool active = Common::ElfInfo::Instance().GameSerial() == "CUSA01715";
+    static const bool active = [] {
+        const auto serial = Common::ElfInfo::Instance().GameSerial();
+        return serial == "CUSA01623" || serial == "CUSA01715" || serial == "CUSA01716" ||
+               serial == "CUSA01720" || serial == "CUSA01740" || serial == "CUSA01741";
+    }();
     gow3_fastpath_state.store(active ? 2 : 1, std::memory_order_relaxed);
     return active;
 }

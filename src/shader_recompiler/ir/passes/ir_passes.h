@@ -8,13 +8,14 @@
 
 namespace Shader {
 struct Profile;
-void InjectClipDistanceAttributes(IR::Program& program, RuntimeInfo& runtime_info);
+void InjectClipDistanceAttributes(IR::Program& program, const RuntimeInfo& runtime_info);
 } // namespace Shader
 
 namespace Shader::Optimization {
 
 void SsaRewritePass(IR::BlockList& program);
 void IdentityRemovalPass(IR::BlockList& program);
+void InterpolationEliminationPass(IR::Program& program);
 void DeadCodeEliminationPass(IR::Program& program);
 void ConstantPropagationPass(IR::BlockList& program);
 void FlattenExtendedUserdataPass(IR::Program& program);

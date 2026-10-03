@@ -14,7 +14,6 @@
 
 #include "common/assert.h"
 #include "common/debug.h"
-#include "common/elf_info.h"
 #include "common/hash.h"
 #include "common/polyfill_thread.h"
 #include "common/thread.h"
@@ -1169,7 +1168,7 @@ SHAD_NO_INLINE bool Liverpool::TryPromoteGoW3Eos(const PM4CmdEventWriteEos& pack
 }
 
 SHAD_NO_INLINE void Liverpool::ProcessEventWriteEos(const PM4CmdEventWriteEos& packet) {
-    const bool is_gow3 = (Common::ElfInfo::Instance().GameSerial() == "CUSA01715");
+    const bool is_gow3 = VideoCore::GpuAuthorityTracker::Instance().IsGow3FastpathActive();
     if (is_gow3 && rasterizer && TryPromoteGoW3Eos(packet)) {
         return;
     }

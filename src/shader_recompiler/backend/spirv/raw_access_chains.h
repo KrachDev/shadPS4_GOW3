@@ -10,4 +10,4 @@ namespace Shader::Backend::SPIRV {
 
 void ConvertRawAccessChains(std::vector<u32>& code);
 
-}
+} // namespace Shader::Backend::SPIRV

@@ -260,6 +260,8 @@ public:
     Id sample_mask{};
     Id sample_index{};
     Id clip_distances{};
+    std::array<Id, MaxEmulatedClipDistances / 4> emulated_clip_distances{};
+    u8 emulated_clip_distance_mask{};
     Id cull_distances{};
 
     Id patch_vertices{};
@@ -355,7 +357,6 @@ public:
     size_t bda_pagetable_index{};
     size_t fault_buffer_index{};
     Id physical_pointer_type_u32;
-    Id uniform_buffer_sizes;
 
     Id sampler_type{};
     Id sampler_pointer_type{};

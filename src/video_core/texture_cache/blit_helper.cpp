@@ -47,6 +47,10 @@ BlitHelper::~BlitHelper() {
 void BlitHelper::ReinterpretColorAsMsDepth(u32 width, u32 height, u32 num_samples,
                                            vk::Format src_pixel_format, vk::Format dst_pixel_format,
                                            vk::Image source, vk::Image dest) {
+    const Vulkan::GpuTimingContext timing{scheduler,
+                                         {.kind = Vulkan::GpuWork::ImageBlit,
+                                          .resource0 = Vulkan::GpuHandle(dest),
+                                          .resource1 = Vulkan::GpuHandle(source)}};
     const vk::ImageViewUsageCreateInfo color_usage_ci{.usage = vk::ImageUsageFlagBits::eSampled};
     const vk::ImageViewCreateInfo color_view_ci = {
         .pNext = &color_usage_ci,
@@ -150,6 +154,10 @@ void BlitHelper::ReinterpretColorAsMsDepth(u32 width, u32 height, u32 num_sample
 void BlitHelper::CopyBetweenMsImages(u32 width, u32 height, u32 num_samples,
                                      vk::Format pixel_format, bool src_msaa, vk::Image source,
                                      vk::Image dest) {
+    const Vulkan::GpuTimingContext timing{scheduler,
+                                         {.kind = Vulkan::GpuWork::ImageBlit,
+                                          .resource0 = Vulkan::GpuHandle(dest),
+                                          .resource1 = Vulkan::GpuHandle(source)}};
     const vk::ImageViewUsageCreateInfo src_usage_ci{.usage = vk::ImageUsageFlagBits::eSampled};
     const vk::ImageViewCreateInfo src_view_ci = {
         .pNext = &src_usage_ci,

@@ -191,9 +191,9 @@ struct Image {
                          std::optional<SubresourceRange> subres_range);
     void Transit(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                  std::optional<SubresourceRange> range);
-    void Upload(std::span<const vk::BufferImageCopy> upload_copies, vk::Buffer buffer, u64 offset);
+    void Upload(std::span<const vk::BufferImageCopy> upload_copies, vk::Buffer buffer);
     void Download(std::span<const vk::BufferImageCopy> download_copies, vk::Buffer buffer,
-                  u64 offset, u64 download_size);
+                  u64 offset, u64 download_size, bool for_tiling = false);
 
     void CopyImage(Image& src_image);
     void CopyImageWithBuffer(Image& src_image, vk::Buffer buffer, u64 offset);
@@ -234,9 +234,12 @@ public:
     vk::ImageUsageFlags usage_flags;
     vk::FormatFeatureFlags2 format_features;
     struct State {
-        vk::PipelineStageFlags2 pl_stage = vk::PipelineStageFlagBits2::eAllCommands;
+        vk::PipelineStageFlags2 pl_stage{};
         vk::AccessFlags2 access_mask = vk::AccessFlagBits2::eNone;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
+        vk::PipelineStageFlags2 write_stage{};
+        vk::AccessFlags2 write_access{};
+        vk::PipelineStageFlags2 read_stages{};
     };
     struct BackingImage {
         UniqueImage image;

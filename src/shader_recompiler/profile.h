@@ -56,6 +56,7 @@ struct Profile {
     bool supports_uniform_buffer_int16{};
     u32 max_uniform_buffer_size{};
     u32 uniform_buffer_alignment{};
+    u32 robust_uniform_buffer_alignment{1};
     u32 max_stage_uniform_buffers{};
     u32 max_uniform_buffers{};
 

@@ -138,7 +138,7 @@ public:
     /// are not ordered against each other. A write waits for the reads since the last write,
     /// which themselves waited for it, or for that write when nothing read the buffer since.
     std::optional<vk::BufferMemoryBarrier2> GetBarrier(vk::AccessFlags2 dst_access,
-                                                       vk::PipelineStageFlagBits2 dst_stage,
+                                                       vk::PipelineStageFlags2 dst_stage,
                                                        u32 offset = 0) {
         constexpr vk::AccessFlags2 WriteAccess = vk::AccessFlagBits2::eShaderWrite |
                                                  vk::AccessFlagBits2::eTransferWrite |
@@ -152,35 +152,40 @@ public:
                 (visible_access & dst_access) == dst_access;
             const bool stage_visible =
                 (visible_stages & vk::PipelineStageFlagBits2::eAllCommands) ||
-                (visible_stages & dst_stage) == vk::PipelineStageFlags2{dst_stage};
+                (visible_stages & dst_stage) == dst_stage;
             read_stages |= dst_stage;
             if (access_visible && stage_visible) {
                 return {};
             }
             src_stage = write_stage;
             src_access = write_access;
-            visible_access |= dst_access;
-            visible_stages |= dst_stage;
+            if (offset == 0) {
+                // Reads of another kind (uniform vs storage) widen what is visible instead of
+                // replacing it; replacing made bindings alternating kinds barrier every time.
+                // The barrier covers the union, so every recorded access/stage pair is visible.
+                visible_access |= dst_access;
+                visible_stages |= dst_stage;
+                dst_access = visible_access;
+                dst_stage = visible_stages;
+            }
         } else {
-            if (!read_stages && write_access == dst_access && write_stage == dst_stage) {
+            if (offset == 0 && !read_stages && (dst_access & vk::AccessFlagBits2::eShaderWrite) &&
+                write_access == dst_access && write_stage == dst_stage) {
                 // Read-write bindings in a row are only ordered across a guest cache flush.
                 if (write_epoch == epoch) {
                     return {};
                 }
             }
-            if (read_stages) {
-                src_stage = read_stages;
-                src_access = {};
-            } else {
-                src_stage = write_stage;
-                src_access = write_access;
-            }
-            write_access = dst_access;
-            write_stage = dst_stage;
+            src_stage = write_stage | read_stages;
+            src_access = write_access;
+            write_access = offset == 0 ? dst_access : write_access | dst_access;
+            write_stage = offset == 0 ? dst_stage : write_stage | dst_stage;
             write_epoch = epoch;
             visible_access = {};
             visible_stages = {};
-            read_stages = {};
+            if (offset == 0) {
+                read_stages = {};
+            }
         }
 
         DEBUG_ASSERT(offset < size_bytes);

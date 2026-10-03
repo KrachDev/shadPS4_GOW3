@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <unordered_map>
 #include "shader_recompiler/frontend/control_flow_graph.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/basic_block.h"
@@ -253,6 +254,7 @@ public:
         buffer.used_types |= desc.used_types;
         buffer.is_written |= desc.is_written;
         buffer.is_formatted |= desc.is_formatted;
+        buffer.is_divergent_read |= desc.is_divergent_read;
         return index;
     }
 
@@ -490,8 +492,90 @@ SharpLocation TrackSharp(const IR::Inst* inst, const IR::Block& current_parent, 
     return SharpLocationFromSource(sources[0]);
 }
 
+using UniformityCache = std::unordered_map<const IR::Inst*, bool>;
+
+/// Whether a value is the same in every lane: derived only from user data, immediates, lane
+/// reductions and loads at such addresses, as values GCN keeps in scalar registers are. Phis are
+/// assumed uniform when their inputs are, even past divergent branches; a wrong positive only
+/// costs speed, as uniform buffers accept an index that varies per lane.
+bool IsLaneUniform(const IR::Value& value, UniformityCache& cache, u32 depth = 0) {
+    if (value.IsImmediate()) {
+        return true;
+    }
+    const IR::Inst* inst = value.InstRecursive();
+    if (const auto it = cache.find(inst); it != cache.end()) {
+        return it->second;
+    }
+    if (depth >= 64) {
+        return false;
+    }
+    // Loop phis reach themselves: assume uniform until an input proves otherwise.
+    cache[inst] = true;
+    bool uniform = true;
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::GetUserData:
+    case IR::Opcode::ReadFirstLane:
+    case IR::Opcode::ReadLane:
+    case IR::Opcode::Ballot:
+    case IR::Opcode::BallotFindLsb:
+    case IR::Opcode::GroupAny:
+    case IR::Opcode::WarpId:
+        break;
+    case IR::Opcode::GetAttributeU32: {
+        const auto attribute = inst->Arg(0).Attribute();
+        uniform = attribute == IR::Attribute::WorkgroupId ||
+                  attribute == IR::Attribute::WorkgroupIndex;
+        break;
+    }
+    case IR::Opcode::GetAttribute:
+    case IR::Opcode::GetPatch:
+    case IR::Opcode::GetTessGenericAttribute:
+    case IR::Opcode::ReadTcsGenericOuputAttribute:
+    case IR::Opcode::GetThreadBitScalarReg:
+    case IR::Opcode::GetMaskLaneVariable:
+    case IR::Opcode::GetVectorRegister:
+    case IR::Opcode::GetExec:
+    case IR::Opcode::GetVcc:
+    case IR::Opcode::GetVccLo:
+    case IR::Opcode::GetVccHi:
+    case IR::Opcode::LaneId:
+    case IR::Opcode::QuadShuffle:
+    case IR::Opcode::WriteLane:
+    case IR::Opcode::CubeFaceIndex:
+        uniform = false;
+        break;
+    default:
+        if (IsImageInstruction(*inst) || IsDataRingInstruction(*inst) || IsBufferAtomic(*inst)) {
+            uniform = false;
+            break;
+        }
+        for (size_t i = 0; i < inst->NumArgs() && uniform; ++i) {
+            uniform = IsLaneUniform(inst->Arg(i), cache, depth + 1);
+        }
+        break;
+    }
+    cache[inst] = uniform;
+    return uniform;
+}
+
+/// Whether a buffer read may load from a different address in each lane. Scalar loads never do;
+/// vector loads do unless their index and offset are lane-uniform.
+bool IsDivergentBufferRead(const IR::Inst& inst, const AmdGpu::Buffer& buffer,
+                           UniformityCache& cache) {
+    if (inst.GetOpcode() == IR::Opcode::ReadConstBuffer || IsBufferStore(inst)) {
+        return false;
+    }
+    if (inst.GetOpcode() == IR::Opcode::LoadBufferFormatF32 || buffer.add_tid_enable) {
+        return true;
+    }
+    const auto inst_info = inst.Flags<IR::BufferInstInfo>();
+    return (inst_info.index_enable && !IsLaneUniform(IR::GetBufferIndexArg(&inst), cache)) ||
+           (inst_info.voffset_enable && !IsLaneUniform(IR::GetBufferVOffsetArg(&inst), cache)) ||
+           !IsLaneUniform(IR::GetBufferSOffsetArg(&inst), cache);
+}
+
 void PatchBufferSharp(IR::Block& block, IR::Inst& inst, Info& info, Descriptors& descriptors,
-                      const Profile& profile) {
+                      const Profile& profile, UniformityCache& uniformity) {
     IR::Inst* handle = inst.Arg(0).InstRecursive();
     u32 buffer_binding = 0;
     if (handle->AreAllArgsImmediates()) {
@@ -514,6 +598,7 @@ void PatchBufferSharp(IR::Block& block, IR::Inst& inst, Info& info, Descriptors&
             .used_types = BufferDataType(inst, profile, buffer.GetNumberFmt()),
             .inline_cbuf = buffer,
             .buffer_type = BufferType::Guest,
+            .is_divergent_read = IsDivergentBufferRead(inst, buffer, uniformity),
         });
     } else {
         // Normal buffer resource.
@@ -528,6 +613,7 @@ void PatchBufferSharp(IR::Block& block, IR::Inst& inst, Info& info, Descriptors&
             .is_written = IsBufferStore(inst),
             .is_formatted = inst.GetOpcode() == IR::Opcode::LoadBufferFormatF32 ||
                             inst.GetOpcode() == IR::Opcode::StoreBufferFormatF32,
+            .is_divergent_read = IsDivergentBufferRead(inst, buffer, uniformity),
         });
     }
 
@@ -1167,10 +1253,11 @@ void ResourceTrackingPass(IR::Program& program, const Profile& profile) {
 
     // Pass 1: Track resource sharps
     Descriptors descriptors{info};
+    UniformityCache uniformity;
     for (IR::Block* const block : program.blocks) {
         for (IR::Inst& inst : block->Instructions()) {
             if (IsBufferInstruction(inst)) {
-                PatchBufferSharp(*block, inst, info, descriptors, profile);
+                PatchBufferSharp(*block, inst, info, descriptors, profile, uniformity);
             } else if (IsImageInstruction(inst)) {
                 PatchImageSharp(*block, inst, info, descriptors, profile);
             }

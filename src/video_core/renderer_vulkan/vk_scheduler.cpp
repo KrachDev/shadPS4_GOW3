@@ -267,6 +267,12 @@ Scheduler::Scheduler(const Instance& instance, bool async_submit, bool threaded_
         transfer_timeline = std::move(semaphore);
     }
     bool gpu_profiling = false;
+    if (GpuTiming::Requested()) {
+        gpu_timing = std::make_unique<GpuTiming>(instance, master_semaphore.Handle(), presentation);
+        if (!gpu_timing->IsEnabled()) {
+            gpu_timing.reset();
+        }
+    }
 #if TRACY_GPU_ENABLED
     profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
     // Tracy zones wrap the command buffer on the recording side.
@@ -315,10 +321,48 @@ Scheduler::~Scheduler() {
 #if TRACY_GPU_ENABLED
     std::free(profiler_scope);
 #endif
+    gpu_timing.reset();
+}
+
+bool Scheduler::BeginGpuTiming(GpuWork kind, u64 resource0, u64 resource1, u64 work) {
+    if (!gpu_timing) {
+        return false;
+    }
+    GpuTimingLabel label{};
+    if (kind == GpuWork::Draw || kind == GpuWork::Dispatch) {
+        label = gpu_timing_label;
+        label.pipeline = GpuHandle(gpu_timing_pipelines[kind == GpuWork::Dispatch]);
+    }
+    if (label.kind == GpuWork::Count) {
+        label.kind = kind;
+    }
+    if (resource0) {
+        label.resource0 = resource0;
+    }
+    if (resource1) {
+        label.resource1 = resource1;
+    }
+    Record([this, label, work](vk::CommandBuffer cmdbuf) { gpu_timing->Begin(cmdbuf, label, work); });
+    return true;
+}
+
+void Scheduler::EndGpuTiming() {
+    Record([this](vk::CommandBuffer cmdbuf) { gpu_timing->End(cmdbuf); });
+}
+
+void Scheduler::EndGpuTimingFrame() {
+    if (gpu_timing) {
+        EndRendering();
+        Record([this](vk::CommandBuffer cmdbuf) { gpu_timing->EndFrame(cmdbuf); });
+    }
 }
 
 SHAD_NO_INLINE void Scheduler::BeginNewRendering(const RenderState& new_state) {
     EndRendering();
+    const GpuTimingScope timing{
+        *this, GpuWork::RenderBegin,
+        new_state.num_color_attachments ? GpuHandle(new_state.color_attachments[0].image_view) : 0,
+        GpuHandle(new_state.depth_stencil_attachment.image_view)};
     is_rendering = true;
     render_state = new_state;
     Record(
@@ -326,6 +370,7 @@ SHAD_NO_INLINE void Scheduler::BeginNewRendering(const RenderState& new_state) {
 }
 
 SHAD_NO_INLINE void Scheduler::EndRenderingScope() {
+    const GpuTimingScope timing{*this, GpuWork::RenderEnd};
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
 }
@@ -471,6 +516,9 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 
     current_cmdbuf = command_pool.Commit(master_semaphore.CurrentTick());
     Check(current_cmdbuf.begin(begin_info));
+    if (gpu_timing) {
+        gpu_timing->BeginCommandBuffer(current_cmdbuf);
+    }
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
     dynamic_state.Invalidate();
@@ -507,8 +555,21 @@ Scheduler::Prologue Scheduler::RecordPrologue(const PrologueCopies& copies, u64 
     Check(cmdbuf.begin(vk::CommandBufferBeginInfo{
         .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
     }));
+    if (gpu_timing) {
+        u64 bytes{};
+        for (const auto& region : copies.regions) {
+            bytes += region.size;
+        }
+        gpu_timing->BeginTransfer(cmdbuf,
+                                 {.kind = GpuWork::TransferUpload,
+                                  .resource0 = GpuHandle(copies.dst),
+                                  .resource1 = GpuHandle(copies.src)}, bytes);
+    }
     cmdbuf.copyBuffer(copies.src, copies.dst,
                       std::span{copies.regions.data(), copies.regions.size()});
+    if (gpu_timing) {
+        gpu_timing->EndTransfer(cmdbuf);
+    }
     if (on_transfer_queue) {
         Check(cmdbuf.end());
         // The semaphore makes the copies available to everything the submission runs.
@@ -581,6 +642,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     EndRendering();
     Check(current_cmdbuf.end());
     const Prologue prologue = RecordPrologue(CollectPrologue(), signal_value, info);
+    if (gpu_timing) {
+        gpu_timing->OnSubmit(signal_value);
+    }
     const bool graphics_prologue = prologue.cmdbuf && !prologue.on_transfer_queue;
     const std::array cmdbufs{prologue.cmdbuf, current_cmdbuf};
     const u32 first_cmdbuf = graphics_prologue ? 0U : 1U;
@@ -820,6 +884,9 @@ void Scheduler::ExecuteWork(RecordWork& work) {
         Check(record_cmdbuf.begin(vk::CommandBufferBeginInfo{
             .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit,
         }));
+        if (gpu_timing) {
+            gpu_timing->BeginCommandBuffer(record_cmdbuf);
+        }
     }
     work.chunk->ExecuteAll(record_cmdbuf);
     if (work.submit) {
@@ -834,6 +901,9 @@ void Scheduler::SubmitRecorded(const SubmitRequest& request) {
     Check(record_cmdbuf.end());
     SubmitInfo info = request.info;
     const Prologue prologue = RecordPrologue(request.prologue, request.signal_tick, info);
+    if (gpu_timing) {
+        gpu_timing->OnSubmit(request.signal_tick);
+    }
     SubmitJob job{
         .info = info,
         .prologue = prologue,

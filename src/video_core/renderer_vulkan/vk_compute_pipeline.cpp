@@ -33,12 +33,8 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         .pName = "main",
     };
 
-    u32 binding = profile.force_uniform_buffers ? 1 : 0;
+    u32 binding{};
     boost::container::small_vector<vk::DescriptorSetLayoutBinding, 32> bindings;
-    if (profile.force_uniform_buffers) {
-        bindings.push_back({0, vk::DescriptorType::eUniformBuffer, 1,
-                            vk::ShaderStageFlagBits::eCompute});
-    }
     for (u32 i = 0; i < info->buffers.size(); ++i) {
         bindings.push_back({
             .binding = binding++,

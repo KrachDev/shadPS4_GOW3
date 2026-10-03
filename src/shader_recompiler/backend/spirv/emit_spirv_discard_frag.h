@@ -9,6 +9,6 @@
 
 namespace Shader::Backend::SPIRV {
 
-[[nodiscard]] std::vector<u32> EmitDiscardFragmentShader(std::array<Shader::OutputMap, 3> outputs);
+[[nodiscard]] std::vector<u32> EmitDiscardFragmentShader(u8 clip_distance_mask);
 
 } // namespace Shader::Backend::SPIRV

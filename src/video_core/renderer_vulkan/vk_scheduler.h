@@ -12,6 +12,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 #include <queue>
 
@@ -24,6 +25,7 @@
 #include "video_core/amdgpu/regs_primitive.h"
 #include "video_core/renderer_vulkan/vk_command_chunk.h"
 #include "video_core/renderer_vulkan/vk_command_recorder.h"
+#include "video_core/renderer_vulkan/vk_gpu_timing.h"
 #include "video_core/renderer_vulkan/vk_master_semaphore.h"
 #include "video_core/renderer_vulkan/vk_record_audit.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
@@ -594,6 +596,7 @@ public:
     /// Binds a graphics pipeline only when it differs from the state already recorded in the
     /// current guest command buffer.
     void BindGraphicsPipeline(vk::Pipeline pipeline) {
+        NotifyGpuTimingPipeline(vk::PipelineBindPoint::eGraphics, pipeline);
         const u64 tick = CurrentTick();
         if (graphics_pipeline_valid && graphics_pipeline_tick == tick &&
             graphics_pipeline == pipeline) {
@@ -606,6 +609,24 @@ public:
         graphics_pipeline_tick = tick;
         graphics_pipeline = pipeline;
     }
+
+    bool HasGpuTiming() const {
+        return gpu_timing != nullptr;
+    }
+
+    GpuTimingLabel ExchangeGpuTimingLabel(GpuTimingLabel label) {
+        return std::exchange(gpu_timing_label, label);
+    }
+
+    void NotifyGpuTimingPipeline(vk::PipelineBindPoint bind_point, vk::Pipeline pipeline) {
+        if (gpu_timing) {
+            gpu_timing_pipelines[bind_point == vk::PipelineBindPoint::eCompute] = pipeline;
+        }
+    }
+
+    bool BeginGpuTiming(GpuWork kind, u64 resource0, u64 resource1, u64 work);
+    void EndGpuTiming();
+    void EndGpuTimingFrame();
 
     /// Returns true when a tick has been triggered by the GPU.
     [[nodiscard]] bool IsFree(u64 tick) noexcept {
@@ -754,6 +775,9 @@ private:
     /// Prologue command buffers and their completion, when the device has a transfer queue.
     std::unique_ptr<CommandPool> transfer_pool;
     vk::UniqueSemaphore transfer_timeline;
+    std::unique_ptr<GpuTiming> gpu_timing;
+    GpuTimingLabel gpu_timing_label;
+    std::array<vk::Pipeline, 2> gpu_timing_pipelines{};
     DynamicState dynamic_state;
     vk::CommandBuffer current_cmdbuf;
     u64 graphics_push_descriptor_epoch{};

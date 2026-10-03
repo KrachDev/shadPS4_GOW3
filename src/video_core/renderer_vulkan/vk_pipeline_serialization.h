@@ -8,7 +8,7 @@
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
 namespace Serialization {
-inline constexpr u32 PipelineKeyVersion = 3u;
+inline constexpr u32 PipelineKeyVersion = 4u;
 }
 
 namespace Vulkan {

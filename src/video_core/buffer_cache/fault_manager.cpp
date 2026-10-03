@@ -85,6 +85,10 @@ void FaultManager::ProcessFaultBuffer() {
     }
 
     const u32 offset = current_area * PageFaultAreaSize;
+    const Vulkan::GpuTimingContext timing{scheduler,
+                                         {.kind = Vulkan::GpuWork::BufferFault,
+                                          .resource0 = Vulkan::GpuHandle(fault_buffer.Handle()),
+                                          .resource1 = Vulkan::GpuHandle(download_buffer.Handle())}};
     u8* mapped = download_buffer.mapped_data.data() + offset;
     std::memset(mapped, 0, PageFaultAreaSize);
 

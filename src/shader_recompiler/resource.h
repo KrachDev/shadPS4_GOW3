@@ -54,6 +54,9 @@ struct BufferResource {
     u8 instance_attrib{};
     bool is_written{};
     bool is_formatted{};
+    /// Read at an address that may differ per lane. Buffers read only at lane-uniform addresses,
+    /// by scalar loads or vector loads with uniform operands, suit a uniform buffer.
+    bool is_divergent_read{};
 
     bool IsSpecial() const noexcept {
         return buffer_type != BufferType::Guest;

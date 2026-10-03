@@ -273,4 +273,4 @@ void ConvertRawAccessChains(std::vector<u32>& code) {
     code = std::move(output);
 }
 
-}
+} // namespace Shader::Backend::SPIRV

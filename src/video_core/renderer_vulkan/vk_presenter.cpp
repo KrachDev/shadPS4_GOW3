@@ -1198,7 +1198,13 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
                               view_info.format == vk::Format::eB8G8R8A8Srgb;
     const auto filtered = postfx_pass.Render(draw_scheduler, image_view, image_size,
                                             {frame->width, frame->height}, GetPostFxOptions(), input_linear);
-    pp_pass.Render(cmdbuf, filtered.view, filtered.size, *frame, pp_settings);
+    {
+        const GpuTimingContext timing{draw_scheduler,
+                                      {.kind = GpuWork::PostProcess,
+                                       .resource0 = GpuHandle(frame->image),
+                                       .resource1 = GpuHandle(filtered.view)}};
+        pp_pass.Render(cmdbuf, filtered.view, filtered.size, *frame, pp_settings);
+    }
 
     DebugState.game_resolution = {image_size.width, image_size.height};
     DebugState.output_resolution = {frame->width, frame->height};
@@ -1217,6 +1223,7 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     frame->frame_id = gcp_frame_id;
     frame->latch_ns = 0;
     SubmitInfo info{};
+    draw_scheduler.EndGpuTimingFrame();
     draw_scheduler.Flush(info);
 
     // When the GPU is the slower side, the command processor would otherwise run ahead until
@@ -1319,6 +1326,7 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
     frame->frame_id = present_thread ? 0 : gcp_frame_id;
     frame->latch_ns = 0;
     SubmitInfo info{};
+    scheduler.EndGpuTimingFrame();
     scheduler.Flush(info);
     if (!present_thread) {
         EndGuestFrame();
@@ -1485,7 +1493,11 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, const u64 presentat
             ImGui::PopStyleVar(3);
             ImGui::PopStyleColor();
         }
-        ImGui::Core::Render(raw_cmdbuf, swapchain_image_view, swapchain.GetExtent());
+        {
+            const GpuTimingScope timing{scheduler, GpuWork::Composition,
+                                        GpuHandle(swapchain_image_view), GpuHandle(frame->image)};
+            ImGui::Core::Render(raw_cmdbuf, swapchain_image_view, swapchain.GetExtent());
+        }
 
         if (capture_with_overlays_count > 0) {
             pending_screenshots.emplace_back(
@@ -1585,6 +1597,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, const u64 presentat
     }
     const u64 present_tick = scheduler.CurrentTick();
     ImGui::Core::TextureManager::EndFrame(scheduler);
+    scheduler.EndGpuTimingFrame();
     scheduler.Flush(info);
     // Present to swapchain.
     if (mark_latency) {

@@ -497,7 +497,6 @@ static Error Umount(const OrbisSaveDataMountPoint* mountPoint, bool call_backup 
         if (instance.has_value()) {
             const auto& slot_name = instance->GetMountPoint();
             if (slot_name == mount_point_str) {
-                const auto dir_name = instance->GetDirName();
                 // TODO: check if is busy
                 instance->Umount();
                 if (call_backup) {

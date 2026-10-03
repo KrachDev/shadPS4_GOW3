@@ -169,6 +169,10 @@ public:
         return timestamp_valid_bits;
     }
 
+    [[nodiscard]] u32 TransferTimestampValidBits() const noexcept {
+        return transfer_queue_family_index ? transfer_timestamp_valid_bits : timestamp_valid_bits;
+    }
+
     /// Returns true if anisotropic filtering is supported
     bool IsAnisotropicFilteringSupported() const {
         return features.samplerAnisotropy;
@@ -405,6 +409,11 @@ public:
         return properties.limits.minUniformBufferOffsetAlignment;
     }
 
+    /// Returns the granularity of robust uniform buffer bounds checks
+    u32 RobustUniformBufferAlignment() const {
+        return robust_uniform_buffer_alignment;
+    }
+
     /// Returns the minimum required alignment for storage buffers
     vk::DeviceSize StorageMinAlignment() const {
         return properties.limits.minStorageBufferOffsetAlignment;
@@ -589,6 +598,7 @@ private:
     TracyVkCtx profiler_context{};
     u32 queue_family_index{0};
     u32 timestamp_valid_bits{};
+    u32 transfer_timestamp_valid_bits{};
     bool swapchain_maintenance1{};
     bool present_wait2{};
     bool present_wait{};
@@ -597,6 +607,7 @@ private:
     bool nv_raw_access_chains{};
     bool uniform_buffer_shaders{};
     bool uniform_buffer_int16{};
+    u32 robust_uniform_buffer_alignment{};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
     bool amd_shader_explicit_vertex_parameter{};

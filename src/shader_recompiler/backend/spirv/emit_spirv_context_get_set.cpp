@@ -149,6 +149,13 @@ Id EmitGetAttribute(EmitContext& ctx, IR::Attribute attr, u32 comp, u32 index) {
         ++comp;
     }
     switch (attr) {
+    case IR::Attribute::ClipDistance: {
+        ASSERT(ctx.emulated_clip_distance_mask & (1u << comp));
+        const u32 packed = PackedClipDistanceIndex(ctx.emulated_clip_distance_mask, comp);
+        return ctx.OpLoad(ctx.F32[1],
+                          ctx.OpAccessChain(ctx.input_f32, ctx.emulated_clip_distances[packed / 4],
+                                            ctx.ConstU32(packed % 4)));
+    }
     case IR::Attribute::Position0:
         ASSERT(ctx.l_stage == LogicalStage::Geometry);
         return ctx.OpLoad(ctx.F32[1],
@@ -293,6 +300,13 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 elemen
         return op_store(
             ctx.OpAccessChain(ctx.output_f32, ctx.output_position, ctx.ConstU32(element)));
     case IR::Attribute::ClipDistance:
+        if (ctx.emulated_clip_distance_mask) {
+            ASSERT(ctx.emulated_clip_distance_mask & (1u << element));
+            const u32 packed = PackedClipDistanceIndex(ctx.emulated_clip_distance_mask, element);
+            return op_store(ctx.OpAccessChain(ctx.output_f32,
+                                              ctx.emulated_clip_distances[packed / 4],
+                                              ctx.ConstU32(packed % 4)));
+        }
         return op_store(
             ctx.OpAccessChain(ctx.output_f32, ctx.clip_distances, ctx.ConstU32(element)));
     case IR::Attribute::CullDistance:

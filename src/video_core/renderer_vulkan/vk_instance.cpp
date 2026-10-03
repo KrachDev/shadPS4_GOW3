@@ -228,11 +228,14 @@ bool Instance::CreateDevice() {
     const vk::StructureChain properties_chain = physical_device.getProperties2<
         vk::PhysicalDeviceProperties2, vk::PhysicalDeviceVulkan11Properties,
         vk::PhysicalDeviceVulkan12Properties, vk::PhysicalDeviceVulkan13Properties,
-        vk::PhysicalDevicePushDescriptorPropertiesKHR>();
+        vk::PhysicalDevicePushDescriptorPropertiesKHR, vk::PhysicalDeviceRobustness2PropertiesEXT>();
     vk11_props = properties_chain.get<vk::PhysicalDeviceVulkan11Properties>();
     vk12_props = properties_chain.get<vk::PhysicalDeviceVulkan12Properties>();
     vk13_props = properties_chain.get<vk::PhysicalDeviceVulkan13Properties>();
     push_descriptor_props = properties_chain.get<vk::PhysicalDevicePushDescriptorPropertiesKHR>();
+    robust_uniform_buffer_alignment = static_cast<u32>(
+        properties_chain.get<vk::PhysicalDeviceRobustness2PropertiesEXT>()
+            .robustUniformBufferAccessSizeAlignment);
     LOG_INFO(Render_Vulkan, "Physical device subgroup size {}", vk11_props.subgroupSize);
 
     if (available_extensions.empty()) {
@@ -434,6 +437,7 @@ bool Instance::CreateDevice() {
             if ((flags & vk::QueueFlagBits::eTransfer) && !(flags & vk::QueueFlagBits::eGraphics) &&
                 !(flags & vk::QueueFlagBits::eCompute) && family_properties[i].queueCount > 0) {
                 transfer_queue_family_index = static_cast<u32>(i);
+                transfer_timestamp_valid_bits = family_properties[i].timestampValidBits;
                 break;
             }
         }

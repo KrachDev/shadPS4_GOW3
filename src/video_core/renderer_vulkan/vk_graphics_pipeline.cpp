@@ -32,11 +32,8 @@ u64 BuildAuxTessPreviousStageOutputMask(const Shader::Info* vs_info,
         return 0;
     }
 
-    u64 mask = 0;
-    if (fs_info.clip_distance_emulation &&
-        vs_info->stores.GetAny(Shader::IR::Attribute::ClipDistance)) {
-        mask |= 1ull;
-    }
+    const u32 num_clip_attrs = Shader::NumClipDistanceAttributes(fs_info.clip_distance_mask);
+    u64 mask = (1ull << num_clip_attrs) - 1;
 
     for (u32 i = 0; i < Shader::IR::NumParams; ++i) {
         const auto param = Shader::IR::Attribute::Param0 + static_cast<int>(i);
@@ -44,7 +41,7 @@ u64 BuildAuxTessPreviousStageOutputMask(const Shader::Info* vs_info,
             continue;
         }
         const u32 location =
-            Shader::Backend::SPIRV::AuxTessAttributeLocation(i, fs_info.clip_distance_emulation);
+            Shader::Backend::SPIRV::AuxTessAttributeLocation(i, num_clip_attrs);
         mask |= 1ull << location;
     }
     return mask;
@@ -283,13 +280,10 @@ GraphicsPipeline::GraphicsPipeline(
             .module = modules[stage],
             .pName = "main",
         });
-    } else if (runtime_infos[u32(Shader::LogicalStage::Fragment)].fs_info.clip_distance_emulation) {
+    } else if (runtime_infos[u32(Shader::LogicalStage::Fragment)].fs_info.clip_distance_mask) {
         if (!preloading) {
-            const auto vs_runtime_info =
-                runtime_infos[static_cast<u32>(Shader::LogicalStage::Vertex)].vs_info;
-
-            sdata.fragment =
-                Shader::Backend::SPIRV::EmitDiscardFragmentShader(vs_runtime_info.outputs);
+            sdata.fragment = Shader::Backend::SPIRV::EmitDiscardFragmentShader(
+                runtime_infos[u32(Shader::LogicalStage::Fragment)].fs_info.clip_distance_mask);
         }
         shader_stages.emplace_back(vk::PipelineShaderStageCreateInfo{
             .stage = vk::ShaderStageFlagBits::eFragment,
@@ -547,8 +541,6 @@ void GraphicsPipeline::CreateSquarePipeline(
                vk::to_string(result));
     square_pipeline = std::move(pipe);
     SetObjectName(device, *square_pipeline, "Graphics Pipeline {} squaring pass", debug_str);
-    LOG_INFO(Render_Vulkan,
-             "Graphics pipeline {} squares its scaled MIN/MAX blend with a second draw", debug_str);
 }
 
 GraphicsPipeline::~GraphicsPipeline() = default;
@@ -619,10 +611,7 @@ template void GraphicsPipeline::GetVertexInputs(
 
 void GraphicsPipeline::BuildDescSetLayout(bool preloading) {
     boost::container::small_vector<vk::DescriptorSetLayoutBinding, 32> bindings;
-    u32 binding = profile.force_uniform_buffers ? 1 : 0;
-    if (profile.force_uniform_buffers) {
-        bindings.push_back({0, vk::DescriptorType::eUniformBuffer, 1, AllGraphicsStageBits});
-    }
+    u32 binding{};
 
     for (const auto* stage : stages) {
         if (!stage) {

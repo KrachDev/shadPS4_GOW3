@@ -975,6 +975,13 @@ void RecordSpecializationShape(Program& program, size_t permutation, u64 fetch_s
     ++program.specialization_shape_epoch;
 }
 
+/// SHADPS4_MANUAL_INTERP=0 uses hardware interpolation on NVIDIA instead of the exact GCN
+/// barycentric formula. Changing it invalidates the shader cache.
+[[nodiscard]] bool ManualInterpolationAllowed() {
+    const char* env = std::getenv("SHADPS4_MANUAL_INTERP");
+    return env == nullptr || env[0] != '0';
+}
+
 /// SHADPS4_VERIFY_STAGE_SHAPE=1 also runs the full comparison on every shape match and logs
 /// any disagreement.
 [[nodiscard]] bool VerifySpecializationShapes() {
@@ -1074,7 +1081,7 @@ struct PipelineCache::OptimizationState {
 SHAD_NO_INLINE bool PipelineCache::OptimizationState::MatchesGraphicsDependency(
     PipelineCache& cache) {
     const u32 expected_active_mask = graphics_dependency.active_mask;
-    Shader::Backend::Bindings binding{.unified = cache.profile.force_uniform_buffers ? 1U : 0U};
+    Shader::Backend::Bindings binding{};
     for (u32 logical_index = 0; logical_index < MaxShaderStages; ++logical_index) {
         if (((expected_active_mask >> logical_index) & 1U) == 0) {
             continue;
@@ -1385,17 +1392,16 @@ SHAD_NOINLINE const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage s
         for (u32 i = 0; i < Shader::MaxColorBuffers; i++) {
             info.fs_info.color_buffers[i] = graphics_key.color_buffers[i];
         }
-        // Lowered user clip planes ride the same emulation path as guest-exported distances, so
-        // the fragment side arms whenever the hardware vertex stage lowers them, keeping its input
-        // locations in sync with the shifted vertex outputs.
-        const bool lowers_user_clip_planes =
-            regs.clipper_control.user_clip_plane_enable &&
-            !regs.stage_enable.IsStageEnabled(static_cast<u32>(Stage::Geometry));
-        info.fs_info.clip_distance_emulation =
-            ((regs.vs_output_control.clip_distance_enable &&
-              !regs.stage_enable.IsStageEnabled(static_cast<u32>(Stage::Local))) ||
-             lowers_user_clip_planes) &&
-            profile.needs_clip_distance_emulation;
+        if (profile.needs_clip_distance_emulation &&
+            !regs.stage_enable.IsStageEnabled(static_cast<u32>(Stage::Local)) &&
+            !regs.stage_enable.IsStageEnabled(static_cast<u32>(Stage::Geometry))) {
+            const auto& ctl = regs.vs_output_control;
+            const u32 clip_mask = ctl.clip_distance_enable &
+                                  ((ctl.vs_out_ccdist0_enable ? 0x0fu : 0u) |
+                                   (ctl.vs_out_ccdist1_enable ? 0xf0u : 0u));
+            info.fs_info.clip_distance_mask = static_cast<u8>(
+                clip_mask ? clip_mask : regs.clipper_control.user_clip_plane_enable);
+        }
         break;
     }
     case Stage::Compute: {
@@ -1670,7 +1676,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
             instance_.IsAmdShaderExplicitVertexParameterSupported(),
         .supports_fragment_shader_barycentric = instance_.IsFragmentShaderBarycentricSupported(),
         .needs_manual_interpolation = instance.IsFragmentShaderBarycentricSupported() &&
-                                      instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
+                                      instance.GetDriverID() == vk::DriverId::eNvidiaProprietary &&
+                                      ManualInterpolationAllowed(),
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
                               instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_buffer_offsets = instance.StorageMinAlignment() > 4 ||
@@ -1685,8 +1692,9 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .supports_uniform_buffer_int16 = instance_.SupportsUniformBufferInt16(),
         .max_uniform_buffer_size = instance_.GetLimits().maxUniformBufferRange,
         .uniform_buffer_alignment = static_cast<u32>(instance_.UniformMinAlignment()),
-        .max_stage_uniform_buffers = instance_.GetLimits().maxPerStageDescriptorUniformBuffers - 1,
-        .max_uniform_buffers = instance_.GetLimits().maxDescriptorSetUniformBuffers - 1,
+        .robust_uniform_buffer_alignment = instance_.RobustUniformBufferAlignment(),
+        .max_stage_uniform_buffers = instance_.GetLimits().maxPerStageDescriptorUniformBuffers,
+        .max_uniform_buffers = instance_.GetLimits().maxDescriptorSetUniformBuffers,
     };
     const auto initial_data = LoadNativePipelineCache();
     const vk::PipelineCacheCreateInfo cache_info{
@@ -1986,7 +1994,7 @@ bool PipelineCache::RefreshGraphicsStages() {
         Pending,
     };
 
-    Shader::Backend::Bindings binding{.unified = profile.force_uniform_buffers ? 1U : 0U};
+    Shader::Backend::Bindings binding{};
     const auto bind_stage = [&](Shader::Stage stage_in,
                                 Shader::LogicalStage stage_out) -> BindResult {
         const auto stage_in_idx = static_cast<u32>(stage_in);
@@ -2125,7 +2133,7 @@ bool PipelineCache::RefreshGraphicsStages() {
 }
 
 bool PipelineCache::RefreshComputeKey() {
-    Shader::Backend::Bindings binding{.unified = profile.force_uniform_buffers ? 1U : 0U};
+    Shader::Backend::Bindings binding{};
     const auto& cs_pgm = liverpool->GetCsRegs();
     const auto cs_params = AmdGpu::GetParams(cs_pgm);
     const auto result =

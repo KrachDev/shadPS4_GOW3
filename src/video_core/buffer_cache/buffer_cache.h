@@ -194,6 +194,12 @@ public:
         return recorded;
     }
 
+    /// Counts the uploads recorded into cached buffers. Each leaves its visibility to the next
+    /// tracked access of the buffer, which reads through device addresses bypass.
+    [[nodiscard]] u64 UploadCount() const noexcept {
+        return upload_count;
+    }
+
     void BeginStreamCopyBatch() noexcept;
 
     [[nodiscard]] u16 QueueStreamCopy(const StreamCopyRequest& request) {
@@ -397,6 +403,7 @@ private:
         bool recorded{};
     };
     std::optional<UploadBarrierBatch> upload_barrier_batch;
+    u64 upload_count{};
     RangeSet image_alias_ranges;
     RangeSet pending_image_readback_ranges;
     struct ImageSyncState {

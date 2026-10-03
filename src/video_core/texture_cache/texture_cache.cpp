@@ -1681,8 +1681,13 @@ void TextureCache::RefreshImage(Image& image, bool overwritten) {
 
     const auto [in_buffer, in_offset] =
         buffer_cache.ObtainBufferForImage(image.info.guest_address, image.info.guest_size);
-    if (auto barrier = in_buffer->GetBarrier(vk::AccessFlagBits2::eTransferRead,
-                                             vk::PipelineStageFlagBits2::eTransfer)) {
+    const bool in_host_memory = in_buffer->usage != MemoryUsage::DeviceLocal;
+    const bool compute_reads = image.info.props.is_tiled && !in_host_memory;
+    if (auto barrier = in_buffer->GetBarrier(
+            compute_reads ? vk::AccessFlagBits2::eShaderStorageRead
+                          : vk::AccessFlagBits2::eTransferRead,
+            compute_reads ? vk::PipelineStageFlagBits2::eComputeShader
+                          : vk::PipelineStageFlagBits2::eCopy)) {
         scheduler.CommandBuffer().pipelineBarrier2(vk::DependencyInfo{
             .dependencyFlags = vk::DependencyFlagBits::eByRegion,
             .bufferMemoryBarrierCount = 1,
@@ -1690,14 +1695,14 @@ void TextureCache::RefreshImage(Image& image, bool overwritten) {
         });
     }
 
-    const bool in_host_memory = in_buffer->usage != MemoryUsage::DeviceLocal;
     const auto [buffer, offset] =
-        tile_manager.DetileImage(in_buffer->Handle(), in_offset, image.info, in_host_memory);
+        tile_manager.DetileImage(in_buffer->Handle(), in_offset, image.info, image_copies,
+                                 in_host_memory);
     for (auto& copy : image_copies) {
         copy.bufferOffset += offset;
     }
 
-    image.Upload(image_copies, buffer, offset);
+    image.Upload(image_copies, buffer);
 }
 
 vk::Sampler TextureCache::GetSampler(const AmdGpu::Sampler& sampler,

@@ -19,8 +19,8 @@ enum class AuxShaderType : u32 {
 };
 
 [[nodiscard]] constexpr u32 AuxTessAttributeLocation(u32 param_index,
-                                                     bool clip_distance_emulation) noexcept {
-    return param_index + (clip_distance_emulation ? 1u : 0u);
+                                                     u32 num_clip_attributes) noexcept {
+    return param_index + num_clip_attributes;
 }
 
 [[nodiscard]] std::vector<u32> EmitAuxilaryTessShader(AuxShaderType type,

@@ -117,6 +117,11 @@ void CommandRecorder::pipelineBarrier(
     vk::DependencyFlags flags, vk::ArrayProxy<const vk::MemoryBarrier> const& memory_barriers,
     vk::ArrayProxy<const vk::BufferMemoryBarrier> const& buffer_barriers,
     vk::ArrayProxy<const vk::ImageMemoryBarrier> const& image_barriers) const {
+    const GpuTimingScope timing{
+        *scheduler, GpuWork::Barrier,
+        image_barriers.size() ? GpuHandle(image_barriers.data()[0].image) : 0,
+        buffer_barriers.size() ? GpuHandle(buffer_barriers.data()[0].buffer) : 0,
+        memory_barriers.size() + buffer_barriers.size() + image_barriers.size()};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().pipelineBarrier(src_stage_mask, dst_stage_mask, flags,
                                                       memory_barriers, buffer_barriers,
@@ -155,6 +160,11 @@ void CommandRecorder::pipelineBarrier(
 }
 
 void CommandRecorder::pipelineBarrier2(const vk::DependencyInfo& info) const {
+    const GpuTimingScope timing{
+        *scheduler, GpuWork::Barrier,
+        info.imageMemoryBarrierCount ? GpuHandle(info.pImageMemoryBarriers[0].image) : 0,
+        info.bufferMemoryBarrierCount ? GpuHandle(info.pBufferMemoryBarriers[0].buffer) : 0,
+        info.memoryBarrierCount + info.bufferMemoryBarrierCount + info.imageMemoryBarrierCount};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().pipelineBarrier2(info);
         return;
@@ -202,6 +212,7 @@ void CommandRecorder::pipelineBarrier2(const vk::DependencyInfo& info) const {
 }
 
 void CommandRecorder::bindPipeline(vk::PipelineBindPoint bind_point, vk::Pipeline pipeline) const {
+    scheduler->NotifyGpuTimingPipeline(bind_point, pipeline);
     scheduler->Record([bind_point, pipeline](vk::CommandBuffer cmdbuf) {
         cmdbuf.bindPipeline(bind_point, pipeline);
     });
@@ -480,6 +491,10 @@ void CommandRecorder::setScissorWithCount(vk::ArrayProxy<const vk::Rect2D> const
 }
 
 void CommandRecorder::beginRendering(const vk::RenderingInfo& info) const {
+    const GpuTimingScope timing{
+        *scheduler, GpuWork::RenderBegin,
+        info.colorAttachmentCount ? GpuHandle(info.pColorAttachments[0].imageView) : 0,
+        info.pDepthAttachment ? GpuHandle(info.pDepthAttachment->imageView) : 0};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().beginRendering(info);
         return;
@@ -533,11 +548,13 @@ void CommandRecorder::beginRendering(const vk::RenderingInfo& info) const {
 }
 
 void CommandRecorder::endRendering() const {
+    const GpuTimingScope timing{*scheduler, GpuWork::RenderEnd};
     scheduler->Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
 }
 
 void CommandRecorder::draw(u32 vertex_count, u32 instance_count, u32 first_vertex,
                            u32 first_instance) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Draw, 0, 0, u64{vertex_count} * instance_count};
     scheduler->Record(
         [vertex_count, instance_count, first_vertex, first_instance](vk::CommandBuffer cmdbuf) {
             cmdbuf.draw(vertex_count, instance_count, first_vertex, first_instance);
@@ -546,6 +563,7 @@ void CommandRecorder::draw(u32 vertex_count, u32 instance_count, u32 first_verte
 
 void CommandRecorder::drawIndexed(u32 index_count, u32 instance_count, u32 first_index,
                                   s32 vertex_offset, u32 first_instance) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Draw, 0, 0, u64{index_count} * instance_count};
     scheduler->Record([index_count, instance_count, first_index, vertex_offset,
                        first_instance](vk::CommandBuffer cmdbuf) {
         cmdbuf.drawIndexed(index_count, instance_count, first_index, vertex_offset, first_instance);
@@ -554,6 +572,7 @@ void CommandRecorder::drawIndexed(u32 index_count, u32 instance_count, u32 first
 
 void CommandRecorder::drawIndirect(vk::Buffer buffer, vk::DeviceSize offset, u32 draw_count,
                                    u32 stride) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Draw};
     scheduler->Record([buffer, offset, draw_count, stride](vk::CommandBuffer cmdbuf) {
         cmdbuf.drawIndirect(buffer, offset, draw_count, stride);
     });
@@ -561,6 +580,7 @@ void CommandRecorder::drawIndirect(vk::Buffer buffer, vk::DeviceSize offset, u32
 
 void CommandRecorder::drawIndexedIndirect(vk::Buffer buffer, vk::DeviceSize offset, u32 draw_count,
                                           u32 stride) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Draw};
     scheduler->Record([buffer, offset, draw_count, stride](vk::CommandBuffer cmdbuf) {
         cmdbuf.drawIndexedIndirect(buffer, offset, draw_count, stride);
     });
@@ -569,6 +589,7 @@ void CommandRecorder::drawIndexedIndirect(vk::Buffer buffer, vk::DeviceSize offs
 void CommandRecorder::drawIndirectCount(vk::Buffer buffer, vk::DeviceSize offset,
                                         vk::Buffer count_buffer, vk::DeviceSize count_offset,
                                         u32 max_draw_count, u32 stride) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Draw};
     scheduler->Record([buffer, offset, count_buffer, count_offset, max_draw_count,
                        stride](vk::CommandBuffer cmdbuf) {
         cmdbuf.drawIndirectCount(buffer, offset, count_buffer, count_offset, max_draw_count,
@@ -579,6 +600,7 @@ void CommandRecorder::drawIndirectCount(vk::Buffer buffer, vk::DeviceSize offset
 void CommandRecorder::drawIndexedIndirectCount(vk::Buffer buffer, vk::DeviceSize offset,
                                                vk::Buffer count_buffer, vk::DeviceSize count_offset,
                                                u32 max_draw_count, u32 stride) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Draw};
     scheduler->Record([buffer, offset, count_buffer, count_offset, max_draw_count,
                        stride](vk::CommandBuffer cmdbuf) {
         cmdbuf.drawIndexedIndirectCount(buffer, offset, count_buffer, count_offset, max_draw_count,
@@ -587,18 +609,29 @@ void CommandRecorder::drawIndexedIndirectCount(vk::Buffer buffer, vk::DeviceSize
 }
 
 void CommandRecorder::dispatch(u32 group_count_x, u32 group_count_y, u32 group_count_z) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Dispatch, 0, 0,
+                               u64{group_count_x} * group_count_y * group_count_z};
     scheduler->Record([group_count_x, group_count_y, group_count_z](vk::CommandBuffer cmdbuf) {
         cmdbuf.dispatch(group_count_x, group_count_y, group_count_z);
     });
 }
 
 void CommandRecorder::dispatchIndirect(vk::Buffer buffer, vk::DeviceSize offset) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Dispatch};
     scheduler->Record(
         [buffer, offset](vk::CommandBuffer cmdbuf) { cmdbuf.dispatchIndirect(buffer, offset); });
 }
 
 void CommandRecorder::copyBuffer(vk::Buffer src, vk::Buffer dst,
                                  vk::ArrayProxy<const vk::BufferCopy> const& regions) const {
+    u64 bytes{};
+    if (scheduler->HasGpuTiming()) {
+        for (const auto& region : regions) {
+            bytes += region.size;
+        }
+    }
+    const GpuTimingScope timing{*scheduler, GpuWork::BufferCopy, GpuHandle(dst), GpuHandle(src),
+                               bytes};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().copyBuffer(src, dst, regions);
         return;
@@ -612,6 +645,7 @@ void CommandRecorder::copyBuffer(vk::Buffer src, vk::Buffer dst,
 void CommandRecorder::copyImage(vk::Image src, vk::ImageLayout src_layout, vk::Image dst,
                                 vk::ImageLayout dst_layout,
                                 vk::ArrayProxy<const vk::ImageCopy> const& regions) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::ImageCopy, GpuHandle(dst), GpuHandle(src)};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().copyImage(src, src_layout, dst, dst_layout, regions);
         return;
@@ -627,6 +661,7 @@ void CommandRecorder::copyImage(vk::Image src, vk::ImageLayout src_layout, vk::I
 void CommandRecorder::copyBufferToImage(
     vk::Buffer src, vk::Image dst, vk::ImageLayout dst_layout,
     vk::ArrayProxy<const vk::BufferImageCopy> const& regions) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::ImageUpload, GpuHandle(dst), GpuHandle(src)};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().copyBufferToImage(src, dst, dst_layout, regions);
         return;
@@ -642,6 +677,7 @@ void CommandRecorder::copyBufferToImage(
 void CommandRecorder::copyImageToBuffer(
     vk::Image src, vk::ImageLayout src_layout, vk::Buffer dst,
     vk::ArrayProxy<const vk::BufferImageCopy> const& regions) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::ImageReadback, GpuHandle(dst), GpuHandle(src)};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().copyImageToBuffer(src, src_layout, dst, regions);
         return;
@@ -657,6 +693,7 @@ void CommandRecorder::copyImageToBuffer(
 void CommandRecorder::resolveImage(vk::Image src, vk::ImageLayout src_layout, vk::Image dst,
                                    vk::ImageLayout dst_layout,
                                    vk::ArrayProxy<const vk::ImageResolve> const& regions) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Resolve, GpuHandle(dst), GpuHandle(src)};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().resolveImage(src, src_layout, dst, dst_layout, regions);
         return;
@@ -671,6 +708,8 @@ void CommandRecorder::resolveImage(vk::Image src, vk::ImageLayout src_layout, vk
 
 void CommandRecorder::fillBuffer(vk::Buffer dst, vk::DeviceSize offset, vk::DeviceSize size,
                                  u32 data) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Fill, GpuHandle(dst), 0,
+                               size == VK_WHOLE_SIZE ? 0 : size};
     scheduler->Record([dst, offset, size, data](vk::CommandBuffer cmdbuf) {
         cmdbuf.fillBuffer(dst, offset, size, data);
     });
@@ -679,6 +718,7 @@ void CommandRecorder::fillBuffer(vk::Buffer dst, vk::DeviceSize offset, vk::Devi
 void CommandRecorder::clearColorImage(
     vk::Image image, vk::ImageLayout layout, const vk::ClearColorValue& color,
     vk::ArrayProxy<const vk::ImageSubresourceRange> const& ranges) const {
+    const GpuTimingScope timing{*scheduler, GpuWork::Clear, GpuHandle(image)};
     if (!scheduler->HasRecordingThread()) {
         scheduler->RawCommandBuffer().clearColorImage(image, layout, color, ranges);
         return;

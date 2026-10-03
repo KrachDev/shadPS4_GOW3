@@ -44,6 +44,18 @@
 
 namespace Vulkan {
 
+static constexpr vk::PipelineStageFlagBits2 ShaderStage(Shader::LogicalStage stage) {
+    constexpr std::array stages{
+        vk::PipelineStageFlagBits2::eFragmentShader,
+        vk::PipelineStageFlagBits2::eTessellationControlShader,
+        vk::PipelineStageFlagBits2::eTessellationEvaluationShader,
+        vk::PipelineStageFlagBits2::eVertexShader,
+        vk::PipelineStageFlagBits2::eGeometryShader,
+        vk::PipelineStageFlagBits2::eComputeShader,
+    };
+    return stages[static_cast<u32>(stage)];
+}
+
 static SHAD_NO_INLINE void ValidateResolvedSharp(const Shader::Info& info, const char* kind,
                                                  size_t index, size_t descriptor_count,
                                                  size_t resolved_count) {
@@ -863,6 +875,16 @@ SHAD_NO_INLINE void Rasterizer::EliminateFastClear() {
     ScopeMarkerEnd();
 }
 
+static GpuTimingLabel DrawTimingLabel(const GraphicsPipeline& pipeline, const RenderState& state) {
+    const auto* fragment = pipeline.GetStages()[u32(Shader::LogicalStage::Fragment)];
+    return {.kind = GpuWork::Draw,
+            .shader0 = pipeline.GetStage(Shader::LogicalStage::Vertex).pgm_hash,
+            .shader1 = fragment ? fragment->pgm_hash : 0,
+            .resource0 = state.num_color_attachments
+                             ? GpuHandle(state.color_attachments[0].image_view) : 0,
+            .resource1 = GpuHandle(state.depth_stencil_attachment.image_view)};
+}
+
 void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     RENDERER_TRACE;
 
@@ -899,6 +921,8 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     const auto cmdbuf = scheduler.CommandBuffer();
     scheduler.BindGraphicsPipeline(pipeline->Handle());
 
+    const GpuTimingContext timing{
+        scheduler, scheduler.HasGpuTiming() ? DrawTimingLabel(*pipeline, state) : GpuTimingLabel{}};
     const auto draw = [&] {
         if (is_indexed) {
             cmdbuf.drawIndexed(regs.num_indices, regs.num_instances.NumInstances(), 0,
@@ -999,6 +1023,8 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     } else {
         ASSERT(sizeof(VkDrawIndirectCommand) == stride);
     }
+    const GpuTimingContext timing{
+        scheduler, scheduler.HasGpuTiming() ? DrawTimingLabel(*pipeline, state) : GpuTimingLabel{}};
     const auto draw = [&] {
         if (is_indexed) {
             if (count_address != 0) {
@@ -1038,6 +1064,7 @@ void Rasterizer::DispatchDirect() {
     }
 
     const auto& cs = pipeline->GetStage(Shader::LogicalStage::Compute);
+    const GpuTimingContext timing{scheduler, {.kind = GpuWork::Dispatch, .shader0 = cs.pgm_hash}};
     if (ExecuteShaderHLE(cs, liverpool->regs, cs_program, *this)) {
         return;
     }
@@ -1068,6 +1095,10 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     if (!pipeline) {
         return;
     }
+
+    const GpuTimingContext timing{
+        scheduler, {.kind = GpuWork::Dispatch,
+                    .shader0 = pipeline->GetStage(Shader::LogicalStage::Compute).pgm_hash}};
 
     if (!BindResources(pipeline)) {
         return;
@@ -1124,15 +1155,16 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     buffer_cache.BeginStreamCopyBatch();
     set_write_index = 0;
     set_writes.clear();
-    uniform_buffer_shaders = pipeline->UsesUniformBufferShaders();
-    if (uniform_buffer_shaders) {
-        uniform_buffer_sizes.fill(0);
-        set_writes.resize(1);
-        set_write_index = 1;
-    }
     buffer_barriers.clear();
+    shader_stages = {};
+    for (const auto* stage : pipeline->GetStages()) {
+        if (stage) {
+            shader_stages |= ShaderStage(stage->l_stage);
+        }
+    }
     buffer_infos.clear();
     image_infos.clear();
+    image_descriptor_bindings.clear();
     pending_buffer_bindings.clear();
     stream_buffer_bindings.clear();
     potential_write_images.clear();
@@ -1140,7 +1172,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     bool uses_dma = false;
 
     // Bind resource buffers and textures.
-    Shader::Backend::Bindings binding{.unified = uniform_buffer_shaders ? 1U : 0U};
+    Shader::Backend::Bindings binding{};
     {
         push_data = MakeUserData(liverpool->regs);
     }
@@ -1176,6 +1208,23 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
         EmitPendingGlobalBarrier();
         dma_access_pending = true;
         SynchronizeDmaBuffers();
+        // Uploads leave their visibility to the next tracked access of each buffer, which
+        // device address reads are not.
+        if (const u64 uploads = buffer_cache.UploadCount(); uploads != dma_visible_uploads) {
+            dma_visible_uploads = uploads;
+            const vk::MemoryBarrier2 barrier{
+                .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+                .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .dstAccessMask =
+                    vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
+            };
+            scheduler.EndRendering();
+            scheduler.CommandBuffer().pipelineBarrier2(vk::DependencyInfo{
+                .memoryBarrierCount = 1,
+                .pMemoryBarriers = &barrier,
+            });
+        }
     }
 
     return true;
@@ -1604,12 +1653,8 @@ void Rasterizer::WriteBufferDescriptor(const PendingBufferBinding& pending) {
     set_write.descriptorType = pending.is_uniform ? vk::DescriptorType::eUniformBuffer
                                                  : vk::DescriptorType::eStorageBuffer;
     set_write.pBufferInfo = &buffer_infos.back();
-    if (pending.is_uniform) {
-        const auto& info = buffer_infos.back();
-        ASSERT(!info.buffer || info.range <= instance.GetLimits().maxUniformBufferRange);
-        uniform_buffer_sizes[pending.buffer_binding] =
-            info.buffer ? static_cast<u32>(info.range) : 0;
-    }
+    DEBUG_ASSERT(!pending.is_uniform || !buffer_infos.back().buffer ||
+                 buffer_infos.back().range <= instance.GetLimits().maxUniformBufferRange);
 }
 
 SHAD_NO_INLINE void Rasterizer::FinalizeCachedBuffer(Shader::PushData& push_data,
@@ -1662,7 +1707,7 @@ SHAD_NO_INLINE void Rasterizer::FinalizeCachedBuffer(Shader::PushData& push_data
                             : pending.is_uniform ? vk::AccessFlagBits2::eUniformRead
                                                  : vk::AccessFlagBits2::eShaderRead;
         if (auto barrier =
-                vk_buffer->GetBarrier(shader_access, vk::PipelineStageFlagBits2::eAllCommands)) {
+                vk_buffer->GetBarrier(shader_access, shader_stages)) {
             buffer_barriers.emplace_back(*barrier);
         }
         if (desc.is_written) {
@@ -1690,7 +1735,7 @@ void Rasterizer::FinalizeBuffers(Shader::PushData& push_data, bool stream_only, 
                 const auto access = pending.is_uniform ? vk::AccessFlagBits2::eUniformRead
                                                        : vk::AccessFlagBits2::eShaderRead;
                 if (auto barrier = result.buffer->GetBarrier(
-                        access, vk::PipelineStageFlagBits2::eAllCommands)) {
+                        access, shader_stages)) {
                     buffer_barriers.emplace_back(*barrier);
                 }
             } else {
@@ -1706,23 +1751,6 @@ void Rasterizer::FinalizeBuffers(Shader::PushData& push_data, bool stream_only, 
                 finalize_stream(pending);
             } else {
                 FinalizeCachedBuffer(push_data, pending);
-            }
-        }
-        if (uniform_buffer_shaders) {
-            auto& buffer = buffer_cache.GetUtilityBuffer(VideoCore::MemoryUsage::Stream);
-            const u64 offset =
-                buffer.Copy(uniform_buffer_sizes.data(), sizeof(uniform_buffer_sizes),
-                            instance.UniformMinAlignment());
-            uniform_buffer_sizes_info = {buffer.Handle(), offset, sizeof(uniform_buffer_sizes)};
-            set_writes[0] = {
-                .dstBinding = 0,
-                .descriptorCount = 1,
-                .descriptorType = vk::DescriptorType::eUniformBuffer,
-                .pBufferInfo = &uniform_buffer_sizes_info,
-            };
-            if (auto barrier = buffer.GetBarrier(vk::AccessFlagBits2::eUniformRead,
-                                                vk::PipelineStageFlagBits2::eAllCommands)) {
-                buffer_barriers.emplace_back(*barrier);
             }
         }
     } else {
@@ -1972,6 +2000,7 @@ SHAD_NOINLINE void Rasterizer::BindTextures(const Shader::Info& stage,
                 image = &texture_cache.GetImage(depth_image_id);
             }
             if (image->binding.is_bound) {
+                // A second binding of the image, as storage, needs one layout for both.
                 image->binding.force_general |= image_desc.is_written;
             }
             image->binding.is_bound = 1u;
@@ -1980,6 +2009,14 @@ SHAD_NOINLINE void Rasterizer::BindTextures(const Shader::Info& stage,
         image_descriptor_array_sizes[num_image_descriptors++] = num_bindings;
     }
 
+    struct ImageTransition {
+        VideoCore::ImageId image_id;
+        VideoCore::SubresourceRange range;
+        vk::ImageLayout layout;
+        vk::AccessFlags2 access;
+        vk::PipelineStageFlags2 stages;
+    };
+    boost::container::static_vector<ImageTransition, Shader::NUM_IMAGES> transitions;
     u32 texture_binding_index = 0;
     for (auto& image_binding : image_bindings) {
         auto& image_id = image_binding.image_id;
@@ -2014,33 +2051,70 @@ SHAD_NOINLINE void Rasterizer::BindTextures(const Shader::Info& stage,
             }
             const vk::ImageView image_view_handle = cached_view.image_view;
 
+            auto layout = image.info.props.is_depth
+                              ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
+                              : vk::ImageLayout::eShaderReadOnlyOptimal;
+            vk::AccessFlags2 access = vk::AccessFlagBits2::eShaderRead;
+            vk::PipelineStageFlags2 stages = shader_stages;
+            auto range = view_info.range;
             if ((image.binding.force_general || image.binding.is_target) &&
                 !image.info.props.is_depth) {
-                image.Transit(instance.IsAttachmentFeedbackLoopLayoutSupported() &&
-                                      image.binding.is_target
-                                  ? vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
-                                  : vk::ImageLayout::eGeneral,
-                              vk::AccessFlagBits2::eShaderRead |
-                                  (image.info.props.is_depth
-                                       ? vk::AccessFlagBits2::eDepthStencilAttachmentWrite
-                                       : vk::AccessFlagBits2::eColorAttachmentWrite |
-                                             vk::AccessFlagBits2::eColorAttachmentRead),
-                              {});
+                layout = instance.IsAttachmentFeedbackLoopLayoutSupported() &&
+                                 image.binding.is_target
+                             ? vk::ImageLayout::eAttachmentFeedbackLoopOptimalEXT
+                             : vk::ImageLayout::eGeneral;
+                if (image.binding.is_target) {
+                    access |= vk::AccessFlagBits2::eColorAttachmentWrite |
+                              vk::AccessFlagBits2::eColorAttachmentRead;
+                    stages |= vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+                }
+                range = {{}, image.info.resources};
             } else if (is_storage) {
-                image.Transit(vk::ImageLayout::eGeneral,
-                              vk::AccessFlagBits2::eShaderRead | vk::AccessFlagBits2::eShaderWrite,
-                              view_info.range);
+                layout = vk::ImageLayout::eGeneral;
+            }
+            if (is_storage) {
+                access |= vk::AccessFlagBits2::eShaderWrite;
+            }
+            const auto it = std::ranges::find(transitions, image_id, &ImageTransition::image_id);
+            if (it == transitions.end()) {
+                transitions.push_back({image_id, range, layout, access, stages});
             } else {
-                const auto new_layout = image.info.props.is_depth
-                                            ? vk::ImageLayout::eDepthStencilReadOnlyOptimal
-                                            : vk::ImageLayout::eShaderReadOnlyOptimal;
-                image.Transit(new_layout, vk::AccessFlagBits2::eShaderRead, view_info.range);
+                it->access |= access;
+                it->stages |= stages;
+                if (it->range != range) {
+                    it->range = {{}, image.info.resources};
+                }
+                if (it->layout != layout) {
+                    it->layout = vk::ImageLayout::eGeneral;
+                }
             }
             image.usage.storage |= is_storage;
             image.usage.texture |= !is_storage;
 
-            image_infos.emplace_back(VK_NULL_HANDLE, image_view_handle,
-                                     image.backing->state.layout);
+            image_descriptor_bindings.push_back(
+                {image_id, static_cast<u32>(image_infos.size())});
+            image_infos.emplace_back(VK_NULL_HANDLE, image_view_handle, layout);
+        }
+    }
+
+    VideoCore::Image::Barriers image_barriers;
+    for (const auto& transition : transitions) {
+        auto& image = texture_cache.GetImage(transition.image_id);
+        const auto barriers = image.GetBarriers(transition.layout, transition.access,
+                                                transition.stages, transition.range);
+        image_barriers.insert(image_barriers.end(), barriers.begin(), barriers.end());
+    }
+    if (!image_barriers.empty()) {
+        scheduler.EndRendering();
+        scheduler.CommandBuffer().pipelineBarrier2(vk::DependencyInfo{
+            .imageMemoryBarrierCount = static_cast<u32>(image_barriers.size()),
+            .pImageMemoryBarriers = image_barriers.data(),
+        });
+    }
+    for (const auto& descriptor : image_descriptor_bindings) {
+        const auto it = std::ranges::find(transitions, descriptor.image_id, &ImageTransition::image_id);
+        if (it != transitions.end()) {
+            image_infos[descriptor.descriptor_index].imageLayout = it->layout;
         }
     }
 

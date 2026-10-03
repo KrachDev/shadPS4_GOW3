@@ -70,6 +70,12 @@ EmitContext::EmitContext(const Profile& profile_, const RuntimeInfo& runtime_inf
                          Bindings& binding_)
     : Sirit::Module(profile_.supported_spirv), info{info_}, runtime_info{runtime_info_},
       profile{profile_}, stage{info.stage}, l_stage{info.l_stage}, binding{binding_} {
+    if (l_stage == LogicalStage::Fragment) {
+        emulated_clip_distance_mask = runtime_info.fs_info.clip_distance_mask;
+    } else if (l_stage == LogicalStage::Vertex && stage == Stage::Vertex &&
+               profile.needs_clip_distance_emulation) {
+        emulated_clip_distance_mask = runtime_info.vs_info.ClipDistanceMask();
+    }
     if (info.uses_dma) {
         SetMemoryModel(spv::AddressingModel::PhysicalStorageBuffer64, spv::MemoryModel::GLSL450);
     } else {
@@ -403,10 +409,8 @@ void EmitContext::DefineInputs() {
             }
         }
 
-        const bool has_clip_distance_inputs = runtime_info.fs_info.clip_distance_emulation;
-        // Clip distances attribute vector is the last in inputs array
-        const auto num_inputs =
-            runtime_info.fs_info.num_inputs - (has_clip_distance_inputs ? 1 : 0);
+        const u32 num_clip_attrs = NumClipDistanceAttributes(emulated_clip_distance_mask);
+        const auto num_inputs = runtime_info.fs_info.num_inputs;
 
         for (s32 i = 0; i < num_inputs; i++) {
             const auto& input = runtime_info.fs_info.inputs[i];
@@ -418,7 +422,7 @@ void EmitContext::DefineInputs() {
             const auto [primary, auxiliary] = info.fs_interpolation[i];
             const Id type = F32[num_components];
             const Id attr_id = [&] {
-                const auto bind_location = input.param_index + (has_clip_distance_inputs ? 1 : 0);
+                const auto bind_location = input.param_index + num_clip_attrs;
                 if (primary == Qualifier::PerVertex &&
                     profile.supports_fragment_shader_barycentric) {
                     return Name(DefineInput(TypeArray(type, ConstU32(3U)), bind_location),
@@ -442,11 +446,9 @@ void EmitContext::DefineInputs() {
                                                false, false, primary == Qualifier::PerVertex);
         }
 
-        if (has_clip_distance_inputs) {
-            const auto type = F32[MaxEmulatedClipDistances];
-            const auto attr_id = Name(DefineInput(type, 0), fmt::format("cldist_attr{}", 0));
-            input_params[num_inputs] = GetAttributeInfo(AmdGpu::NumberFormat::Float, attr_id,
-                                                        MaxEmulatedClipDistances, false);
+        for (u32 i = 0; i < num_clip_attrs; ++i) {
+            emulated_clip_distances[i] =
+                Name(DefineInput(F32[4], i), fmt::format("cldist_attr{}", i));
         }
         break;
     }
@@ -548,11 +550,8 @@ void EmitContext::DefineVertexBlock() {
     const std::array<Id, 8> zero{f32_zero_value, f32_zero_value, f32_zero_value, f32_zero_value,
                                  f32_zero_value, f32_zero_value, f32_zero_value, f32_zero_value};
     output_position = DefineVariable(F32[4], spv::BuiltIn::Position, spv::StorageClass::Output);
-    const bool needs_clip_distance_emulation = l_stage == LogicalStage::Vertex &&
-                                               stage == Stage::Vertex &&
-                                               profile.needs_clip_distance_emulation;
     const auto has_clip_distance_outputs = info.stores.GetAny(IR::Attribute::ClipDistance);
-    if (has_clip_distance_outputs && !needs_clip_distance_emulation) {
+    if (has_clip_distance_outputs && !emulated_clip_distance_mask) {
         const Id type{TypeArray(F32[1], ConstU32(8U))};
         const Id initializer{ConstantComposite(type, zero)};
         clip_distances = DefineVariable(type, spv::BuiltIn::ClipDistance, spv::StorageClass::Output,
@@ -589,29 +588,26 @@ void EmitContext::DefineOutputs() {
                 Name(output_attr_array, "out_attrs");
             }
         } else {
-            const bool needs_clip_distance_emulation =
-                stage == Stage::Vertex && profile.needs_clip_distance_emulation &&
-                info.stores.GetAny(IR::Attribute::ClipDistance);
-            u32 num_attrs = 0u;
+            const u32 num_clip_attrs = NumClipDistanceAttributes(emulated_clip_distance_mask);
             for (u32 i = 0; i < IR::NumParams; i++) {
                 const IR::Attribute param{IR::Attribute::Param0 + i};
                 if (!info.stores.GetAny(param)) {
                     continue;
                 }
                 const u32 num_components = info.stores.NumComponents(param);
-                const Id id{
-                    DefineOutput(F32[num_components], i + (needs_clip_distance_emulation ? 1 : 0))};
+                const Id id{DefineOutput(F32[num_components], i + num_clip_attrs)};
                 Name(id, fmt::format("out_attr{}", i));
                 output_params[i] =
                     GetAttributeInfo(AmdGpu::NumberFormat::Float, id, num_components, true);
-                ++num_attrs;
             }
 
-            if (needs_clip_distance_emulation) {
-                clip_distances = Id{DefineOutput(F32[MaxEmulatedClipDistances], 0)};
-                output_params[num_attrs] = GetAttributeInfo(
-                    AmdGpu::NumberFormat::Float, clip_distances, MaxEmulatedClipDistances, true);
-                Name(clip_distances, fmt::format("cldist_attr{}", 0));
+            for (u32 i = 0; i < num_clip_attrs; ++i) {
+                const Id initializer{ConstantComposite(F32[4], f32_zero_value, f32_zero_value,
+                                                       f32_zero_value, f32_zero_value)};
+                const Id id{DefineVariable(F32[4], std::nullopt, spv::StorageClass::Output,
+                                            initializer)};
+                Decorate(id, spv::Decoration::Location, i);
+                emulated_clip_distances[i] = Name(id, fmt::format("cldist_attr{}", i));
             }
         }
         break;
@@ -813,19 +809,6 @@ EmitContext::BufferSpv EmitContext::DefineBuffer(bool is_uniform, bool is_writte
 
 void EmitContext::DefineBuffers() {
     const u64 uniform_mask = info.UniformBufferMask(profile, binding.uniform_buffers);
-    if (profile.force_uniform_buffers) {
-        const Id array = TypeArray(U32[1], ConstU32(NUM_BUFFERS));
-        Decorate(array, spv::Decoration::ArrayStride, 4U);
-        const Id block = TypeStruct(array);
-        Decorate(block, spv::Decoration::Block);
-        MemberDecorate(block, 0, spv::Decoration::Offset, 0U);
-        uniform_buffer_sizes = AddGlobalVariable(TypePointer(spv::StorageClass::Uniform, block),
-                                                spv::StorageClass::Uniform);
-        Decorate(uniform_buffer_sizes, spv::Decoration::Binding, 0U);
-        Decorate(uniform_buffer_sizes, spv::Decoration::DescriptorSet, 0U);
-        Name(uniform_buffer_sizes, "ubo_buffer_sizes");
-        interfaces.push_back(uniform_buffer_sizes);
-    }
     for (const auto& desc : info.buffers) {
         const auto buf_sharp = desc.GetSharp(info);
 
@@ -1239,32 +1222,31 @@ Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u
                 if (alias.id.value != base.value) {
                     continue;
                 }
+                // Plain loads: robustness returns zero past the descriptor range, whose end the
+                // uniform buffer selection keeps on the robustness granularity. An index that
+                // stays an immediate becomes a constant bank operand on NVIDIA.
                 ASSERT(!store);
-                const Id size_ptr = OpAccessChain(TypePointer(spv::StorageClass::Uniform, U32[1]),
-                                                 uniform_buffer_sizes, u32_zero_value,
-                                                 ConstU32(buffer.binding));
-                const Id limit =
-                    OpShiftRightLogical(U32[1], OpLoad(U32[1], size_ptr), ConstU32(shift));
-                const Id zero = scalar_type.value == U64.value ? Constant(scalar_type, u64{0})
-                                                               : Constant(scalar_type, 0U);
                 std::array<Id, 4> components{};
                 for (u32 i = 0; i < count; ++i) {
                     const Id element = i == 0 ? index : OpIAdd(U32[1], index, ConstU32(i));
-                    const Id valid = OpULessThan(U1[1], element, limit);
-                    const Id safe_index = OpSelect(U32[1], valid, element, u32_zero_value);
-                    const Id pointer =
-                        OpAccessChain(alias.pointer_type, base, u32_zero_value, safe_index);
-                    components[i] =
-                        OpSelect(scalar_type, valid, OpLoad(scalar_type, pointer), zero);
+                    components[i] = OpLoad(
+                        scalar_type,
+                        OpAccessChain(alias.pointer_type, base, u32_zero_value, element));
                 }
                 return count == 1 ? components[0]
                                   : OpCompositeConstruct(type, std::span{components}.first(count));
             }
         }
     }
-    if (profile.use_raw_access_chains && count > 1 &&
-        max_index <= (~u32{0} >> shift) - (count - 1)) {
-        const Id byte_offset = OpShiftLeftLogical(U32[1], index, ConstU32(shift));
+    if (profile.use_raw_access_chains && count > 1) {
+        // A vector raw access checks every component against the range, but its byte offset is
+        // 32-bit: an index whose offset would wrap is clamped to the top of the address space,
+        // which no binding reaches, so it still reads zero.
+        const u32 max_vector_index = (~u32{0} >> shift) - (count - 1);
+        const Id clamped_index = max_index <= max_vector_index
+                                     ? index
+                                     : OpUMin(U32[1], index, ConstU32(max_vector_index));
+        const Id byte_offset = OpShiftLeftLogical(U32[1], clamped_index, ConstU32(shift));
         const Id pointer = OpRawAccessChainNV(
             TypePointer(spv::StorageClass::StorageBuffer, type), base, u32_zero_value,
             u32_zero_value, byte_offset,

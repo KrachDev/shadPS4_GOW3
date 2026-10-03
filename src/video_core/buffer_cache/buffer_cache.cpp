@@ -1193,6 +1193,10 @@ void BufferCache::DownloadBufferMemory(Buffer& buffer, VAddr device_addr, u64 si
         .pBufferMemoryBarriers = &pre_barrier,
     });
     cmdbuf.copyBuffer(buffer.buffer, download_buffer.Handle(), copies);
+    download_buffer.write_stage = vk::PipelineStageFlagBits2::eCopy;
+    download_buffer.write_access = vk::AccessFlagBits2::eTransferWrite;
+    download_buffer.visible_access = {};
+    download_buffer.visible_stages = {};
     const auto write_data = [&]() {
         auto* memory = Core::Memory::Instance();
         for (const auto& copy : copies) {
@@ -2257,26 +2261,18 @@ void BufferCache::RecordBufferUpload(Buffer& buffer, vk::Buffer src_buffer,
         span_begin = std::min<u64>(span_begin, copy.dstOffset);
         span_end = std::max<u64>(span_end, copy.dstOffset + copy.size);
     }
+    const bool batched = upload_barrier_batch.has_value();
     const vk::BufferMemoryBarrier2 pre_barrier = {
-        .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .srcAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite |
-                         vk::AccessFlagBits2::eTransferRead | vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+        .srcStageMask = batched ? vk::PipelineStageFlagBits2::eAllCommands
+                               : buffer.write_stage | buffer.read_stages,
+        .srcAccessMask = batched ? vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite
+                                : buffer.write_access,
+        .dstStageMask = vk::PipelineStageFlagBits2::eCopy,
         .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
         .buffer = buffer.Handle(),
         .offset = span_begin,
         .size = span_end - span_begin,
     };
-    const vk::BufferMemoryBarrier2 post_barrier = {
-        .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
-        .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
-        .dstStageMask = vk::PipelineStageFlagBits2::eAllCommands,
-        .dstAccessMask = vk::AccessFlagBits2::eMemoryRead | vk::AccessFlagBits2::eMemoryWrite,
-        .buffer = buffer.Handle(),
-        .offset = span_begin,
-        .size = span_end - span_begin,
-    };
-    const bool batched = upload_barrier_batch.has_value();
     if (!batched || std::exchange(upload_barrier_batch->needs_pre_barrier, false)) {
         cmdbuf.pipelineBarrier2(vk::DependencyInfo{
             .dependencyFlags = vk::DependencyFlagBits::eByRegion,
@@ -2287,13 +2283,13 @@ void BufferCache::RecordBufferUpload(Buffer& buffer, vk::Buffer src_buffer,
     cmdbuf.copyBuffer(src_buffer, buffer.buffer, copies);
     if (batched) {
         upload_barrier_batch->recorded = true;
-    } else {
-        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
-            .dependencyFlags = vk::DependencyFlagBits::eByRegion,
-            .bufferMemoryBarrierCount = 1,
-            .pBufferMemoryBarriers = &post_barrier,
-        });
     }
+    buffer.write_stage |= vk::PipelineStageFlagBits2::eCopy;
+    buffer.write_access |= vk::AccessFlagBits2::eTransferWrite;
+    buffer.visible_access = {};
+    buffer.visible_stages = {};
+    buffer.write_epoch = 0;
+    ++upload_count;
     TouchBuffer(buffer);
     ++buffer.content_generation;
 }

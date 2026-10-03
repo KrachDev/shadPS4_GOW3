@@ -200,7 +200,13 @@ private:
         u64 topology_epoch{};
     } cached_depth_target{};
     boost::container::static_vector<vk::DescriptorImageInfo, Shader::NUM_IMAGES> image_infos;
-    boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS + 1> buffer_infos;
+    struct ImageDescriptorBinding {
+        VideoCore::ImageId image_id;
+        u32 descriptor_index;
+    };
+    boost::container::static_vector<ImageDescriptorBinding, Shader::NUM_IMAGES>
+        image_descriptor_bindings;
+    boost::container::static_vector<vk::DescriptorBufferInfo, Shader::NUM_BUFFERS> buffer_infos;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES> bound_images;
     boost::container::static_vector<VideoCore::ImageId, Shader::NUM_IMAGES>
         potential_write_images;
@@ -209,10 +215,8 @@ private:
     Pipeline::DescriptorWrites set_writes;
     Pipeline::DescriptorWrites partial_set_writes;
     Pipeline::BufferBarriers buffer_barriers;
+    vk::PipelineStageFlags2 shader_stages{};
     Shader::PushData push_data;
-    std::array<u32, Shader::NUM_BUFFERS> uniform_buffer_sizes{};
-    vk::DescriptorBufferInfo uniform_buffer_sizes_info{};
-    bool uniform_buffer_shaders{};
 
     struct PendingBufferBinding {
         const Shader::BufferResource* desc{};
@@ -371,6 +375,8 @@ private:
     /// A pipeline that accesses memory through device addresses ran since the last global
     /// barrier.
     bool dma_access_pending{};
+    /// Buffer cache upload count already made visible to device address accesses.
+    u64 dma_visible_uploads{};
 };
 
 } // namespace Vulkan

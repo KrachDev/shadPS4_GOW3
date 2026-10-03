@@ -391,6 +391,7 @@ PostFxPass::Surface& PostFxPass::Cmaa(Scheduler& scheduler, vk::ImageView input,
 PostFxPass::Output PostFxPass::Render(Scheduler& scheduler, vk::ImageView input,
                                     vk::Extent2D input_size, vk::Extent2D output_size,
                                     Settings settings, bool input_linear) {
+    const GpuTimingContext timing{scheduler, {.kind = GpuWork::PostFx, .resource0 = GpuHandle(input)}};
     next_image = 0;
     const auto trim = [&] {
         while (images.size() > next_image) {

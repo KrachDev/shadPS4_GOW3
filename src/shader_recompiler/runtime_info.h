@@ -4,6 +4,7 @@
 #pragma once
 
 #include <algorithm>
+#include <bit>
 #include <cstring>
 #include <immintrin.h>
 #include <ranges>
@@ -39,7 +40,15 @@ enum class LogicalStage : u32 {
 };
 
 constexpr u32 MaxStageTypes = static_cast<u32>(LogicalStage::NumLogicalStages);
-constexpr auto MaxEmulatedClipDistances = 4u;
+constexpr auto MaxEmulatedClipDistances = 8u;
+
+constexpr u32 NumClipDistanceAttributes(u32 mask) {
+    return (std::popcount(mask) + 3) / 4;
+}
+
+constexpr u32 PackedClipDistanceIndex(u32 mask, u32 component) {
+    return std::popcount(mask & ((1u << component) - 1));
+}
 
 constexpr Stage StageFromIndex(size_t index) noexcept {
     return static_cast<Stage>(index);
@@ -108,6 +117,18 @@ struct VertexRuntimeInfo : protected CommonEsVsRuntimeInfo {
     u32 step_rate_1;
     /// UCP_ENA bits from PA_CL_CLIP_CNTL, lowered to clip distances in the shader.
     u32 user_clip_plane_mask{};
+
+    u8 ClipDistanceMask() const {
+        u32 mask{};
+        for (u32 i = 0; i < num_outputs; ++i) {
+            for (const auto output : outputs[i]) {
+                if (output >= Output::ClipDist0 && output <= Output::ClipDist7) {
+                    mask |= 1u << (u32(output) - u32(Output::ClipDist0));
+                }
+            }
+        }
+        return static_cast<u8>(mask ? mask : user_clip_plane_mask);
+    }
 
     bool operator<=>(const VertexRuntimeInfo& other) const noexcept = default;
 };
@@ -205,7 +226,7 @@ struct FragmentRuntimeInfo {
     AmdGpu::ShaderExportFormat z_export_format;
     u8 mrtz_mask{};
     bool dual_source_blending{false};
-    bool clip_distance_emulation{false};
+    u8 clip_distance_mask{};
 
     bool operator==(const FragmentRuntimeInfo& other) const noexcept {
         u64 lhs_interp_flags;

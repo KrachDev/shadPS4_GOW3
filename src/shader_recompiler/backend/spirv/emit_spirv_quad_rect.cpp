@@ -304,18 +304,17 @@ private:
 
         params.reserve(fs_info.num_inputs);
         const Id input_type{TypeArray(vec4_id, Int(32))};
-        if (fs_info.clip_distance_emulation) {
-            AddParam(model, input_type, 0);
+        const u32 num_clip_attrs = NumClipDistanceAttributes(fs_info.clip_distance_mask);
+        for (u32 i = 0; i < num_clip_attrs; ++i) {
+            AddParam(model, input_type, i);
         }
-        const u32 num_inputs =
-            fs_info.num_inputs - static_cast<u32>(fs_info.clip_distance_emulation);
-        for (u32 i = 0; i < num_inputs; i++) {
+        for (u32 i = 0; i < fs_info.num_inputs; i++) {
             const auto& input = fs_info.inputs[i];
             if (input.IsDefault()) {
                 continue;
             }
             AddParam(model, input_type,
-                     AuxTessAttributeLocation(input.param_index, fs_info.clip_distance_emulation));
+                     AuxTessAttributeLocation(input.param_index, num_clip_attrs));
         }
     }
 
