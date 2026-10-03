@@ -328,26 +328,27 @@ static inline std::span<const u32> NextPacket(std::span<const u32> span, size_t 
     return InvalidNextPacket(span, offset);
 }
 
-static SHAD_NO_INLINE std::span<const u32> NextNonType3Packet(std::span<const u32> dcb, u32 type, Regs& regs) {
+static SHAD_NO_INLINE std::span<const u32> NextNonType3Packet(std::span<const u32> dcb, u32 type,
+                                                             Regs& regs) {
     const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
     switch (type) {
     case 0: {
         const u32 base = header->type0.base.Value();
         const u32 num_words = header->type0.NumWords();
         const u32 total_packet_dwords = 1 + num_words;
-    
+
         if (dcb.size() < total_packet_dwords) {
             LOG_ERROR(Render, "PM4 Type 0: Truncated packet. Available: {}, required: {}",
                       dcb.size(), total_packet_dwords);
             return {};
         }
-    
+
         const u32* payload = dcb.data() + 1;
-    
+
         if (base < Regs::NumRegs) {
             const u32 words_to_copy = std::min(num_words, Regs::NumRegs - base);
             std::memcpy(&regs.reg_array[base], payload, words_to_copy * sizeof(u32));
-    
+
             if (words_to_copy < num_words) {
                 LOG_WARNING(
                     Render,
@@ -358,10 +359,10 @@ static SHAD_NO_INLINE std::span<const u32> NextNonType3Packet(std::span<const u3
             LOG_WARNING(Render, "PM4 Type 0: Out of bounds base register {:#x} (max is {:#x})",
                         base, Regs::NumRegs);
         }
-    
+
         return NextPacket(dcb, total_packet_dwords);
     }
-        case 2:
+    case 2:
         // Type-2 packets are used for padding purposes
         return NextPacket(dcb, 1);
     default:
@@ -1983,7 +1984,35 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             }
             case PM4ItOpcode::StrmoutBufferUpdate: {
                 const auto* strmout = reinterpret_cast<const PM4CmdStrmoutBufferUpdate*>(header);
-                WarnStrmoutBufferUpdate(*strmout);
+                LOG_DEBUG(Render,
+                          "IT_STRMOUT_BUFFER_UPDATE buffer_select = {}, source_select = {}, "
+                          "update_memory = {}",
+                          strmout->buffer_select.Value(),
+                          magic_enum::enum_name(strmout->source_select.Value()),
+                          strmout->update_memory.Value());
+                u32 offset = 0;
+                switch (strmout->source_select.Value()) {
+                case SourceSelect::BufferOffset:
+                    offset = strmout->buffer_offset;
+                    break;
+                case SourceSelect::SrcAddress: {
+                    const VAddr src_addr = strmout->SrcAddress<VAddr>();
+                    if (src_addr) {
+                        std::memcpy(&offset, reinterpret_cast<const void*>(src_addr),
+                                    sizeof(offset));
+                    }
+                    break;
+                }
+                default:
+                    break;
+                }
+                if (strmout->update_memory.Value()) {
+                    const VAddr dst_addr = strmout->DstAddress<VAddr>();
+                    if (dst_addr) {
+                        std::memcpy(reinterpret_cast<void*>(dst_addr), &offset, sizeof(offset));
+                    }
+                }
+                regs.cp_strmout_cntl.offset_update_done = 1;
                 break;
             }
             case PM4ItOpcode::GetLodStats: {
