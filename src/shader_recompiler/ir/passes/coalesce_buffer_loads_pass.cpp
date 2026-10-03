@@ -34,7 +34,8 @@ void CoalesceBufferLoadsPass(IR::Program& program) {
                 }
                 if (next->GetOpcode() == IR::Opcode::ReadConstBuffer) {
                     const auto [next_base, next_offset] = split_index(next->Arg(1));
-                    if (next->Arg(0) != handle || next_base != base ||
+                    if (next->Flags<IR::BufferInstInfo>().raw != flags.raw ||
+                        next->Arg(0) != handle || next_base != base ||
                         next_offset != offset + count) {
                         break;
                     }

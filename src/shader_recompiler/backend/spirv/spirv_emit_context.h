@@ -48,7 +48,7 @@ public:
     void DefineAmdPerVertexAttribs();
     void DefineWorkgroupIndex();
     Id EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u32 count = 1,
-                        Id value = {});
+                        Id value = {}, u32 max_index = ~u32{0});
 
     [[nodiscard]] Id DefineInput(Id type, std::optional<u32> location = std::nullopt,
                                  std::optional<spv::BuiltIn> builtin = std::nullopt) {

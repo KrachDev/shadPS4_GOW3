@@ -1207,72 +1207,48 @@ Id EmitContext::DefineGetBdaPointer() {
 }
 
 Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u32 count,
-                                Id value) {
+                                Id value, u32 max_index) {
     const bool store = Sirit::ValidId(value);
     const Id type = count == 1 ? scalar_type : TypeVector(scalar_type, count);
-    const Id scalar_pointer = TypePointer(spv::StorageClass::StorageBuffer, scalar_type);
-    const auto scalar_access = [&] {
-        std::array<Id, 4> components{};
-        for (u32 i = 0; i < count; ++i) {
-            const Id element = i == 0 ? index : OpIAdd(U32[1], index, ConstU32(i));
-            const Id pointer =
-                profile.use_raw_access_chains
-                    ? OpRawAccessChainNV(
-                          scalar_pointer, base, ConstU32(1u << shift), element,
-                          u32_zero_value, spv::RawAccessChainOperandsMask::RobustnessPerComponentNV)
-                    : OpAccessChain(scalar_pointer, base, u32_zero_value, element);
-            if (store) {
-                const Id component =
-                    count == 1 ? value : OpCompositeExtract(scalar_type, value, i);
-                if (profile.use_raw_access_chains) {
-                    OpStore(pointer, component, spv::MemoryAccessMask::Aligned, 1u << shift);
-                } else {
-                    OpStore(pointer, component);
-                }
-            } else {
-                components[i] = profile.use_raw_access_chains
-                                    ? OpLoad(scalar_type, pointer, spv::MemoryAccessMask::Aligned,
-                                             1u << shift)
-                                    : OpLoad(scalar_type, pointer);
-            }
+    if (profile.use_raw_access_chains && count > 1 &&
+        max_index <= (~u32{0} >> shift) - (count - 1)) {
+        const Id byte_offset = OpShiftLeftLogical(U32[1], index, ConstU32(shift));
+        const Id pointer = OpRawAccessChainNV(
+            TypePointer(spv::StorageClass::StorageBuffer, type), base, u32_zero_value,
+            u32_zero_value, byte_offset,
+            spv::RawAccessChainOperandsMask::RobustnessPerComponentNV);
+        if (store) {
+            OpStore(pointer, value, spv::MemoryAccessMask::Aligned, 1u << shift);
+            return {};
         }
-        return store ? Id{} : count == 1 ? components[0]
-                                        : OpCompositeConstruct(type,
-                                                               std::span{components}.first(count));
-    };
-    if (!profile.use_raw_access_chains || count == 1) {
-        return scalar_access();
+        return OpLoad(type, pointer, spv::MemoryAccessMask::Aligned, 1u << shift);
     }
-
-    const Id vector_label = OpLabel();
-    const Id scalar_label = OpLabel();
-    const Id merge_label = OpLabel();
-    const u32 boundary = u32{1} << (31 - shift);
-    const Id low_index = OpBitwiseAnd(U32[1], index, ConstU32(boundary - 1));
-    const Id contiguous = OpULessThanEqual(U1[1], low_index, ConstU32(boundary - count));
-    OpSelectionMerge(merge_label, spv::SelectionControlMask::MaskNone);
-    OpBranchConditional(contiguous, vector_label, scalar_label);
-
-    AddLabel(vector_label);
-    const Id byte_offset = OpShiftLeftLogical(U32[1], low_index, ConstU32(shift));
-    const Id page = OpShiftRightLogical(U32[1], index, ConstU32(31 - shift));
-    const Id pointer = OpRawAccessChainNV(
-        TypePointer(spv::StorageClass::StorageBuffer, type), base,
-        ConstU32(u32{1} << 31), page, byte_offset,
-        spv::RawAccessChainOperandsMask::RobustnessPerComponentNV);
-    Id vector_result{};
-    if (store) {
-        OpStore(pointer, value, spv::MemoryAccessMask::Aligned, 1u << shift);
-    } else {
-        vector_result = OpLoad(type, pointer, spv::MemoryAccessMask::Aligned, 1u << shift);
+    const Id scalar_pointer = TypePointer(spv::StorageClass::StorageBuffer, scalar_type);
+    std::array<Id, 4> components{};
+    for (u32 i = 0; i < count; ++i) {
+        const Id element = i == 0 ? index : OpIAdd(U32[1], index, ConstU32(i));
+        const Id pointer =
+            profile.use_raw_access_chains
+                ? OpRawAccessChainNV(
+                      scalar_pointer, base, ConstU32(1u << shift), element,
+                      u32_zero_value, spv::RawAccessChainOperandsMask::RobustnessPerComponentNV)
+                : OpAccessChain(scalar_pointer, base, u32_zero_value, element);
+        if (store) {
+            const Id component = count == 1 ? value : OpCompositeExtract(scalar_type, value, i);
+            if (profile.use_raw_access_chains) {
+                OpStore(pointer, component, spv::MemoryAccessMask::Aligned, 1u << shift);
+            } else {
+                OpStore(pointer, component);
+            }
+        } else {
+            components[i] = profile.use_raw_access_chains
+                                ? OpLoad(scalar_type, pointer, spv::MemoryAccessMask::Aligned,
+                                         1u << shift)
+                                : OpLoad(scalar_type, pointer);
+        }
     }
-    OpBranch(merge_label);
-
-    AddLabel(scalar_label);
-    const Id scalar_result = scalar_access();
-    OpBranch(merge_label);
-    AddLabel(merge_label);
-    return store ? Id{} : OpPhi(type, vector_result, vector_label, scalar_result, scalar_label);
+    return store ? Id{} : count == 1 ? components[0]
+                                   : OpCompositeConstruct(type, std::span{components}.first(count));
 }
 
 Id EmitContext::DefineReadConst(bool dynamic) {

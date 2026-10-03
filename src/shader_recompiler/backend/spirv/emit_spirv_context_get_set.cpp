@@ -16,6 +16,44 @@ namespace Shader::Backend::SPIRV {
 using PointerType = EmitContext::PointerType;
 using PointerSize = EmitContext::PointerSize;
 
+static u32 MaxBufferIndex(IR::Value value, u32 depth = 0) {
+    value = value.Resolve();
+    if (value.IsImmediate()) {
+        return value.U32();
+    }
+    if (depth == 8) {
+        return ~u32{0};
+    }
+    const auto* inst = value.Inst();
+    switch (inst->GetOpcode()) {
+    case IR::Opcode::ShiftRightLogical32:
+        if (inst->Arg(1).IsImmediate() && inst->Arg(1).U32() < 32) {
+            return MaxBufferIndex(inst->Arg(0), depth + 1) >> inst->Arg(1).U32();
+        }
+        break;
+    case IR::Opcode::BitwiseAnd32:
+        if (inst->Arg(1).IsImmediate()) {
+            return inst->Arg(1).U32();
+        }
+        break;
+    case IR::Opcode::IAdd32: {
+        const u64 bound = u64{MaxBufferIndex(inst->Arg(0), depth + 1)} +
+                          MaxBufferIndex(inst->Arg(1), depth + 1);
+        return bound <= ~u32{0} ? static_cast<u32>(bound) : ~u32{0};
+    }
+    default:
+        break;
+    }
+    return ~u32{0};
+}
+
+static u32 MaxBufferIndex(const EmitContext& ctx, const IR::Inst* inst, u32 handle) {
+    const u64 max_offset =
+        Sirit::ValidId(ctx.buffers[handle].Offset(PointerSize::B32)) ? 255 >> 2 : 0;
+    const u64 bound = u64{MaxBufferIndex(inst->Arg(1))} + max_offset;
+    return bound <= ~u32{0} ? static_cast<u32>(bound) : ~u32{0};
+}
+
 static std::pair<Id, bool> OutputAttrComponentType(EmitContext& ctx, IR::Attribute attr) {
     if (IR::IsParam(attr)) {
         const u32 index{u32(attr) - u32(IR::Attribute::Param0)};
@@ -348,7 +386,10 @@ static Id EmitLoadBufferB32xN(EmitContext& ctx, IR::Inst* inst, u32 handle, Id a
     const auto& data_types = alias == PointerType::U32 ? ctx.U32 : ctx.F32;
     const auto [id, pointer_type] = spv_buffer.Alias(alias);
 
-    return ctx.EmitBufferAccess(data_types[1], id, address, 2, N);
+    const u32 max_index = N > 1 && ctx.profile.use_raw_access_chains
+                              ? MaxBufferIndex(ctx, inst, handle)
+                              : ~u32{0};
+    return ctx.EmitBufferAccess(data_types[1], id, address, 2, N, {}, max_index);
 }
 
 Id EmitLoadBufferU8(EmitContext& ctx, IR::Inst* inst, u32 handle, Id address) {
@@ -424,7 +465,10 @@ static void EmitStoreBufferB32xN(EmitContext& ctx, IR::Inst* inst, u32 handle, I
     const auto& data_types = alias == PointerType::U32 ? ctx.U32 : ctx.F32;
     const auto [id, pointer_type] = spv_buffer.Alias(alias);
 
-    ctx.EmitBufferAccess(data_types[1], id, address, 2, N, value);
+    const u32 max_index = N > 1 && ctx.profile.use_raw_access_chains
+                              ? MaxBufferIndex(ctx, inst, handle)
+                              : ~u32{0};
+    ctx.EmitBufferAccess(data_types[1], id, address, 2, N, value, max_index);
 }
 
 void EmitStoreBufferU8(EmitContext& ctx, IR::Inst*, u32 handle, Id address, Id value) {
