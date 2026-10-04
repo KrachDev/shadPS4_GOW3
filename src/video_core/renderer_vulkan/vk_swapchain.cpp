@@ -334,7 +334,7 @@ void Swapchain::SetLatencyMarker(const u64 present_id, const vk::LatencyMarkerNV
 }
 
 void Swapchain::SetLowLatencyMode() {
-    // Boost keeps the GPU clocks up while the command processor sleeps between frames.
+    // Boost keeps the GPU clocks up while the game sleeps between frames.
     const vk::LatencySleepModeInfoNV mode_info = {
         .lowLatencyMode = vk::True,
         .lowLatencyBoost = vk::True,

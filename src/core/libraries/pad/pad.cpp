@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <optional>
 
 namespace Libraries::Pad {
@@ -365,6 +366,28 @@ int PS4_SYSV_ABI scePadOutputReport() {
     return ORBIS_OK;
 }
 
+/// The sticks of a DualShock 4 move inside a round gate, so both axes never reach the ends of
+/// their range together. Keyboard bindings and gamepads with square gates or per-axis deadzones
+/// do, and a game that does not normalize the stick vector then moves up to 41% faster
+/// diagonally than on a PS4. Pulls such a stick back onto the circle the axis ends touch.
+static OrbisPadAnalogStick ClampToRoundGate(s32 x, s32 y) {
+    // 128 is the centre; the range reaches 128 steps below it and 127 above.
+    const auto to_unit = [](s32 value) {
+        return static_cast<float>(value - 128) / (value < 128 ? 128.0f : 127.0f);
+    };
+    const float unit_x = to_unit(x);
+    const float unit_y = to_unit(y);
+    const float length_squared = unit_x * unit_x + unit_y * unit_y;
+    if (length_squared <= 1.0f) {
+        return {static_cast<u8>(x), static_cast<u8>(y)};
+    }
+    const float scale = 1.0f / std::sqrt(length_squared);
+    const auto from_unit = [](float unit) {
+        return static_cast<u8>(std::lround(128.0f + unit * (unit < 0.0f ? 128.0f : 127.0f)));
+    };
+    return {from_unit(unit_x * scale), from_unit(unit_y * scale)};
+}
+
 int ProcessStates(OrbisPadData* pData, const Input::State* states, s32 num) {
     if (num > 0 && !states[0].connected) {
         pData[0] = {};
@@ -389,10 +412,11 @@ int ProcessStates(OrbisPadData* pData, const Input::State* states, s32 num) {
         }
 
         pData[i].buttons = states[i].buttonsState;
-        pData[i].leftStick.x = states[i].axes[static_cast<int>(Input::Axis::LeftX)];
-        pData[i].leftStick.y = states[i].axes[static_cast<int>(Input::Axis::LeftY)];
-        pData[i].rightStick.x = states[i].axes[static_cast<int>(Input::Axis::RightX)];
-        pData[i].rightStick.y = states[i].axes[static_cast<int>(Input::Axis::RightY)];
+        pData[i].leftStick = ClampToRoundGate(states[i].axes[static_cast<int>(Input::Axis::LeftX)],
+                                              states[i].axes[static_cast<int>(Input::Axis::LeftY)]);
+        pData[i].rightStick =
+            ClampToRoundGate(states[i].axes[static_cast<int>(Input::Axis::RightX)],
+                             states[i].axes[static_cast<int>(Input::Axis::RightY)]);
         pData[i].analogButtons.l2 = states[i].axes[static_cast<int>(Input::Axis::TriggerLeft)];
         pData[i].analogButtons.r2 = states[i].axes[static_cast<int>(Input::Axis::TriggerRight)];
         pData[i].acceleration.x = states[i].acceleration.x * 0.098;

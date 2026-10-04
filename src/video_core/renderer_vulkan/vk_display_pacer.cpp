@@ -36,6 +36,12 @@ constexpr u64 HistoryMask = (u64{1} << 32) - 1;
 constexpr s64 MaxRatioErrorPermille = 6;
 constexpr s64 MaxRatio = 4;
 
+/// Weight of each latch in the smoothed vblank grid of the VRR pacer.
+constexpr s64 VrrGridFilter = 16;
+/// Time between the 95th percentile of the production times and the present.
+constexpr s64 VrrMarginNs = 1'000'000;
+constexpr u32 VrrMinSamples = 16;
+
 } // Anonymous namespace
 
 DisplayPacer::DisplayPacer(const s64 vblank_period_ns_) : vblank_period_ns{vblank_period_ns_} {}
@@ -192,6 +198,63 @@ DisplayPacer::Result DisplayPacer::AddSample(const s64 latch_ns, const s64 ready
     budget_ns -= std::abs(correction);
     stat_corrections_ns += correction;
     return {.locked = true, .correction_ns = correction};
+}
+
+VrrPacer::VrrPacer(const s64 vblank_period_ns_) : vblank_period_ns{vblank_period_ns_} {}
+
+void VrrPacer::Reset() {
+    grid_ns = 0;
+    planned_present_ns = 0;
+    count = 0;
+    index = 0;
+    miss_boost_ns = 0;
+}
+
+VrrPacer::Schedule VrrPacer::Plan(const s64 latch_ns) {
+    // Frames latch on vblanks, one or several apart. The grid follows the latches slowly, so the
+    // wake-up jitter of single vblanks averages out; a latch off the grid starts a new one.
+    if (grid_ns != 0 && latch_ns > grid_ns) {
+        const s64 ticks = (latch_ns - grid_ns + vblank_period_ns / 2) / vblank_period_ns;
+        const s64 predicted = grid_ns + ticks * vblank_period_ns;
+        const s64 error = latch_ns - predicted;
+        grid_ns = ticks >= 1 && std::abs(error) < vblank_period_ns / 4
+                      ? predicted + error / VrrGridFilter
+                      : latch_ns;
+    } else {
+        grid_ns = latch_ns;
+    }
+
+    const s64 max_delay = vblank_period_ns * 9 / 10;
+    s64 delay = 0;
+    if (count >= VrrMinSamples) {
+        std::array<s64, Window> sorted;
+        std::copy_n(production.begin(), count, sorted.begin());
+        const u32 k = (count * 95) / 100;
+        std::nth_element(sorted.begin(), sorted.begin() + k, sorted.begin() + count);
+        delay = sorted[k] + VrrMarginNs + miss_boost_ns;
+        // The GPU cannot finish frames within a vblank, so each one goes out when it is done.
+        if (delay > max_delay) {
+            delay = 0;
+        }
+    }
+    planned_present_ns = grid_ns + delay;
+    return {.present_ns = planned_present_ns, .wait_limit_ns = grid_ns + max_delay};
+}
+
+void VrrPacer::AddSample(const s64 ready_ns) {
+    const s64 max_delay = vblank_period_ns * 9 / 10;
+    production[index] =
+        ready_ns == 0 ? max_delay : std::clamp(ready_ns - grid_ns, s64{0}, max_delay);
+    index = (index + 1) % Window;
+    count = std::min(count + 1, Window);
+
+    // A paced frame that finished after its present time went out late, and unevenly.
+    const bool paced = planned_present_ns > grid_ns;
+    if (paced && (ready_ns == 0 || ready_ns > planned_present_ns)) {
+        miss_boost_ns = std::min(miss_boost_ns + MissBoostStepNs, MaxMissBoostNs);
+    } else {
+        miss_boost_ns = std::max<s64>(miss_boost_ns - 2 * MissBoostDecayNs, 0);
+    }
 }
 
 } // namespace Vulkan

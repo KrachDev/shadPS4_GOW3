@@ -482,14 +482,19 @@ void Liverpool::Process(std::stop_token stoken) {
 
             Task::Handle task = active_tasks[curr_qid];
             if (!task) [[unlikely]] {
-                auto& queue = mapped_queues[curr_qid];
-                std::scoped_lock lock{queue.m_access};
-                if (queue.submits.empty()) {
-                    ready_queue_mask.fetch_and(~(1ULL << curr_qid), std::memory_order_acq_rel);
-                    continue;
+                {
+                    auto& queue = mapped_queues[curr_qid];
+                    std::scoped_lock lock{queue.m_access};
+                    if (queue.submits.empty()) {
+                        ready_queue_mask.fetch_and(~(1ULL << curr_qid), std::memory_order_acq_rel);
+                        continue;
+                    }
+                    task = queue.submits.front();
+                    active_tasks[curr_qid] = task;
                 }
-                task = queue.submits.front();
-                active_tasks[curr_qid] = task;
+                if (curr_qid == static_cast<s32>(GfxQueueId) && gfx_submit_begin_hook) {
+                    gfx_submit_begin_hook();
+                }
             }
             {
                 task.resume();

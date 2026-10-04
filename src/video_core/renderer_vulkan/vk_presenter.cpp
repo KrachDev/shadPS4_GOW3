@@ -19,6 +19,7 @@
 #include "imgui/renderer/texture_manager.h"
 #include "imgui/shadnet_notifications_layer.h"
 #include "sdl_window.h"
+#include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
@@ -45,6 +46,7 @@
 #include <span>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <vector>
 #include <imgui.h>
 #include <png.h>
@@ -517,7 +519,8 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
       swapchain{instance, window},
       rasterizer{std::make_unique<Rasterizer>(instance, draw_scheduler, liverpool)},
       texture_cache{rasterizer->GetTextureCache()},
-      display_pacer{1'000'000'000 / static_cast<s64>(EmulatorSettings.GetVblankFrequency())} {
+      display_pacer{1'000'000'000 / static_cast<s64>(EmulatorSettings.GetVblankFrequency())},
+      vrr_pacer{1'000'000'000 / static_cast<s64>(EmulatorSettings.GetVblankFrequency())} {
     gpu_frames_ahead = std::min(EmulatorSettings.GetGpuFramesAhead(), MaxGpuFramesAhead);
     const u32 num_images = swapchain.GetImageCount();
     // Four source frames cover all independent ownership states during a host stall: last shown,
@@ -555,8 +558,9 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
             device.createSemaphoreUnique(semaphore_chain.get()));
         const u64 present_id = PresentIdOfFrame(gcp_frame_id);
         swapchain.SetLatencyMarker(present_id, vk::LatencyMarkerNV::eSimulationStart);
-        swapchain.SetLatencyMarker(present_id, vk::LatencyMarkerNV::eRendersubmitStart);
         draw_scheduler.SetLatencyPresentId(present_id);
+        render_submit_pending = true;
+        liverpool->SetGfxSubmitBeginHook([this] { BeginGuestRenderSubmit(); });
     }
 
     SetPostFxOptions(EmulatorSettings.GetUpscaler(), EmulatorSettings.GetAntiAliasing(),
@@ -671,6 +675,7 @@ Presenter::PresentTimingFeedback Presenter::GetPresentTimingFeedback() const {
         .present_call_samples = present_call_samples.load(std::memory_order_acquire),
         .is_fifo = swapchain.IsFIFO(),
         .display_locked = display_locked.load(std::memory_order_acquire),
+        .display_timed = UsesDisplayPacing(),
         .correction_seq = seq,
         .correction_ns = correction_ns.load(std::memory_order_acquire),
     };
@@ -942,7 +947,10 @@ void Presenter::PresentWaitThread(std::stop_token token) {
             pacing.displayed_present_id = std::max(pacing.displayed_present_id, entry.present_id);
             if (timed) {
                 display_pacer.SetNominalDisplayPeriod(window.GetDisplayRefreshPeriodNs());
-                result = display_pacer.AddSample(entry.latch_ns, entry.ready_ns, display_ns);
+                // A frame is available to the display once it is both finished and presented;
+                // VRR pacing presents finished frames late on purpose.
+                result = display_pacer.AddSample(
+                    entry.latch_ns, std::max(entry.ready_ns, entry.present_ns), display_ns);
                 pacing.locked = result->locked;
                 pacing.display_period_ns = display_pacer.DisplayPeriod();
                 pacing.lead_ns = display_pacer.Lead();
@@ -980,39 +988,91 @@ void Presenter::PresentWaitThread(std::stop_token token) {
 }
 
 void Presenter::EndGuestFrame() {
-    const u64 present_id = PresentIdOfFrame(gcp_frame_id);
     const bool reflex = reflex_semaphore && swapchain.HasLowLatency();
     if (reflex) {
-        swapchain.SetLatencyMarker(present_id, vk::LatencyMarkerNV::eRendersubmitEnd);
-        swapchain.SetLatencyMarker(present_id, vk::LatencyMarkerNV::eSimulationEnd);
-        // The command processor plays the part of the game loop: the driver holds it back until
-        // the GPU is about to need the next frame, so the frame starts from fresher guest work
-        // instead of waiting in a queue in front of the GPU.
-        const u64 value = ++reflex_sleep_value;
-        if (swapchain.LatencySleep(*reflex_semaphore, value)) {
-            const vk::Semaphore semaphore = *reflex_semaphore;
-            const vk::SemaphoreWaitInfo wait_info = {
-                .semaphoreCount = 1,
-                .pSemaphores = &semaphore,
-                .pValues = &value,
-            };
-            constexpr u64 MaxSleepNs = 100'000'000;
-            const auto result = instance.GetDevice().waitSemaphores(wait_info, MaxSleepNs);
-            if (result != vk::Result::eSuccess && !reflex_timeout_logged) {
-                reflex_timeout_logged = true;
-                LOG_WARNING(Render_Vulkan, "NVIDIA Reflex sleep did not finish: {}",
-                            vk::to_string(result));
-            }
+        swapchain.SetLatencyMarker(PresentIdOfFrame(gcp_frame_id),
+                                   vk::LatencyMarkerNV::eRendersubmitEnd);
+    }
+    ++gcp_frame_id;
+    // The next frame reaches the command processor with the next guest submission.
+    render_submit_pending = true;
+    draw_scheduler.SetLatencyPresentId(reflex ? PresentIdOfFrame(gcp_frame_id) : 0);
+}
+
+void Presenter::BeginGuestRenderSubmit() {
+    if (!render_submit_pending) {
+        return;
+    }
+    render_submit_pending = false;
+    swapchain.SetLatencyMarker(PresentIdOfFrame(gcp_frame_id),
+                               vk::LatencyMarkerNV::eRendersubmitStart);
+}
+
+void Presenter::WaitForReflex() {
+    std::scoped_lock lock{reflex_mutex};
+    // Each flip of the guest ends one of its frames, and the command processor ends them in the
+    // same order, so both sides give a frame the same present id.
+    const u64 present_id = PresentIdOfFrame(guest_frame_id++);
+    if (!reflex_semaphore || !swapchain.HasLowLatency()) {
+        return;
+    }
+    swapchain.SetLatencyMarker(present_id, vk::LatencyMarkerNV::eSimulationEnd);
+    const u64 value = ++reflex_sleep_value;
+    if (swapchain.LatencySleep(*reflex_semaphore, value)) {
+        const vk::Semaphore semaphore = *reflex_semaphore;
+        const vk::SemaphoreWaitInfo wait_info = {
+            .semaphoreCount = 1,
+            .pSemaphores = &semaphore,
+            .pValues = &value,
+        };
+        constexpr u64 MaxSleepNs = 100'000'000;
+        const auto result = instance.GetDevice().waitSemaphores(wait_info, MaxSleepNs);
+        if (result != vk::Result::eSuccess && !reflex_timeout_logged) {
+            reflex_timeout_logged = true;
+            LOG_WARNING(Render_Vulkan, "NVIDIA Reflex sleep did not finish: {}",
+                        vk::to_string(result));
         }
     }
+    // The guest simulates its next frame once this returns.
+    swapchain.SetLatencyMarker(PresentIdOfFrame(guest_frame_id),
+                               vk::LatencyMarkerNV::eSimulationStart);
+}
 
-    ++gcp_frame_id;
-    const u64 next_present_id = PresentIdOfFrame(gcp_frame_id);
-    if (reflex) {
-        swapchain.SetLatencyMarker(next_present_id, vk::LatencyMarkerNV::eSimulationStart);
-        swapchain.SetLatencyMarker(next_present_id, vk::LatencyMarkerNV::eRendersubmitStart);
+void Presenter::PaceVrrPresent(const u64 present_tick, const s64 latch_ns) {
+    // A display with a cadence of its own is paced through the guest vblank instead.
+    if (!EmulatorSettings.IsVrrPacingEnabled() || display_locked.load(std::memory_order_acquire)) {
+        vrr_pacer.Reset();
+        return;
     }
-    draw_scheduler.SetLatencyPresentId(reflex ? next_present_id : 0);
+
+    using namespace std::chrono;
+    const auto now_ns = [] {
+        return duration_cast<nanoseconds>(steady_clock::now().time_since_epoch()).count();
+    };
+    const VrrPacer::Schedule schedule = vrr_pacer.Plan(latch_ns);
+    const vk::Semaphore present_semaphore = present_scheduler.GetMasterSemaphore()->Handle();
+    const vk::SemaphoreWaitInfo ready_wait = {
+        .semaphoreCount = 1,
+        .pSemaphores = &present_semaphore,
+        .pValues = &present_tick,
+    };
+    const s64 timeout = std::max<s64>(schedule.wait_limit_ns - now_ns(), 0);
+    const bool ready = instance.GetDevice().waitSemaphores(ready_wait, static_cast<u64>(timeout)) ==
+                       vk::Result::eSuccess;
+    const s64 ready_ns = now_ns();
+    vrr_pacer.AddSample(ready ? ready_ns : 0);
+    if (!ready) {
+        return;
+    }
+
+    // The waitable timer wakes up to about half a millisecond late, so the end of the wait spins.
+    constexpr s64 SpinNs = 700'000;
+    if (schedule.present_ns - ready_ns > SpinNs) {
+        Common::AccurateSleep(nanoseconds{schedule.present_ns - ready_ns - SpinNs}, nullptr, false);
+    }
+    while (now_ns() < schedule.present_ns) {
+        std::this_thread::yield();
+    }
 }
 
 bool Presenter::IsVideoOutSurface(const AmdGpu::ColorBuffer& color_buffer) const {
@@ -1599,7 +1659,13 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, const u64 presentat
     ImGui::Core::TextureManager::EndFrame(scheduler);
     scheduler.EndGpuTimingFrame();
     scheduler.Flush(info);
+    if (is_guest_frame && frame->latch_ns != 0) {
+        PaceVrrPresent(present_tick, frame->latch_ns);
+    }
     // Present to swapchain.
+    const s64 present_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                               std::chrono::steady_clock::now().time_since_epoch())
+                               .count();
     if (mark_latency) {
         swapchain.SetLatencyMarker(present_id, vk::LatencyMarkerNV::ePresentStart);
     }
@@ -1621,6 +1687,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, const u64 presentat
                 .swapchain_serial = swapchain_serial,
                 .latch_ns = frame->latch_ns,
                 .ready_ns = 0,
+                .present_ns = present_ns,
             });
         }
         ready_wait_cv.notify_one();

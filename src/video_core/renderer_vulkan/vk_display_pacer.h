@@ -92,4 +92,48 @@ private:
     s64 stat_corrections_ns{};
 };
 
+/// Evens out the frame times of a display that shows each frame as soon as it is presented
+/// (variable refresh).
+///
+/// Such a display takes a frame when the GPU finishes it, so the time the GPU needs for each
+/// frame, not the guest vblank, sets when the frames appear. The presentation thread instead
+/// waits for the GPU and presents each guest frame at a fixed delay after its vblank: the delay
+/// covers the production time of almost every frame, and a later frame goes out when it is done.
+/// The latch times carry the wake-up jitter of the vblank thread, so the delay counts from a
+/// smoothed grid of vblanks.
+///
+/// Only the presentation thread uses it.
+class VrrPacer {
+public:
+    explicit VrrPacer(s64 vblank_period_ns);
+
+    /// Present times of the frame latched at latch_ns.
+    struct Schedule {
+        /// Earliest time to present the frame.
+        s64 present_ns;
+        /// Latest time to wait for the GPU; later the frame goes out unfinished.
+        s64 wait_limit_ns;
+    };
+
+    [[nodiscard]] Schedule Plan(s64 latch_ns);
+
+    /// Records when the GPU finished the frame of the last plan; 0 when it was not done by the
+    /// wait limit.
+    void AddSample(s64 ready_ns);
+
+    void Reset();
+
+private:
+    static constexpr u32 Window = 64;
+
+    s64 vblank_period_ns;
+    /// Smoothed vblank time of the latest planned frame.
+    s64 grid_ns{};
+    s64 planned_present_ns{};
+    std::array<s64, Window> production{};
+    u32 count{};
+    u32 index{};
+    s64 miss_boost_ns{};
+};
+
 } // namespace Vulkan

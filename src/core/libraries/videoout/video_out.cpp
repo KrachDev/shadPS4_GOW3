@@ -206,7 +206,11 @@ s32 PS4_SYSV_ABI sceVideoOutSubmitFlip(s32 handle, s32 bufferIndex, s32 flipMode
     LOG_DEBUG(Lib_VideoOut, "bufferIndex = {}, flipMode = {}, flipArg = {}", bufferIndex, flipMode,
               flipArg);
 
-    return driver->SubmitFlip(port, bufferIndex, flipArg);
+    const s32 result = driver->SubmitFlip(port, bufferIndex, flipArg);
+    if (result == ORBIS_OK) {
+        presenter->WaitForReflex();
+    }
+    return result;
 }
 
 s32 PS4_SYSV_ABI sceVideoOutGetEventId(const Kernel::OrbisKernelEvent* ev) {

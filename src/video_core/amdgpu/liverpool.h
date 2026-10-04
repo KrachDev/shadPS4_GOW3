@@ -111,6 +111,12 @@ public:
         rasterizer = rasterizer_;
     }
 
+    /// Runs on the command processor thread before each graphics submission of the guest starts.
+    /// Set before the guest submits anything.
+    void SetGfxSubmitBeginHook(Common::UniqueFunction<void>&& hook) {
+        gfx_submit_begin_hook = std::move(hook);
+    }
+
     template <bool wait_done = false>
     void SendCommand(auto&& func) {
         if (std::this_thread::get_id() == gpu_id) {
@@ -342,6 +348,7 @@ private:
     std::mutex submit_mutex;
     std::condition_variable_any submit_cv;
     std::queue<Common::UniqueFunction<void>> command_queue{};
+    Common::UniqueFunction<void> gfx_submit_begin_hook;
     std::thread::id gpu_id;
     s32 curr_qid{-1};
 };

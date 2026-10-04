@@ -584,6 +584,14 @@ void VideoOutDriver::VblankThread(std::stop_token token) {
             continue;
         }
         correction_seq = feedback.correction_seq;
+        // An unlocked pacer means the display takes frames as they come (VRR) or has no cadence
+        // the guest can match. vkQueuePresentKHR then returns right after the flip this timer
+        // latched, so steering by it shortens every period by a constant step: the guest vblank
+        // ran 0.6% fast and a game with its own 60 FPS limiter missed a flip every 2.6 s. VRR
+        // pacing delays the presents on purpose, which would read as a late vblank.
+        if (feedback.display_timed || EmulatorSettings.IsVrrPacingEnabled()) {
+            continue;
+        }
 
         // vkQueuePresentKHR completion is only a proxy for host FIFO cadence, not a physical
         // display timestamp. Use it solely for a bounded phase correction; stale or mismatched

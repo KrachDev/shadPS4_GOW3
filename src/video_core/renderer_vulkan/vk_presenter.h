@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <mutex>
 #include <thread>
 #include <queue>
 
@@ -61,6 +62,8 @@ public:
         /// The display holds frames on its own cadence and the present waits steer the guest
         /// vblank phase through correction_ns, which changes with correction_seq.
         bool display_locked;
+        /// Present waits time the display, so only the display pacer may steer the vblank.
+        bool display_timed;
         u64 correction_seq;
         s64 correction_ns;
     };
@@ -118,6 +121,11 @@ public:
 
     Frame* PrepareBlankFrame(bool present_thread);
 
+    /// Guest side end of a frame, called by the guest thread right after it submitted a flip:
+    /// NVIDIA Reflex holds the thread until its next frame should start, as it holds the game
+    /// loop of a PC game.
+    void WaitForReflex();
+
     void Present(Frame* frame, bool is_reusing_frame = false, u64 presentation_epoch = 0);
     Frame* PrepareLastFrame();
 
@@ -170,9 +178,17 @@ private:
     /// Whether present waits pace the presentation of this swapchain.
     [[nodiscard]] bool UsesDisplayPacing() const;
 
-    /// Command processor side end of a guest frame: NVIDIA Reflex markers and sleep, then the
+    /// Command processor side end of a guest frame: Reflex render submission marker, then the
     /// next frame number.
     void EndGuestFrame();
+
+    /// Marks the start of the render submission of the next guest frame at the first graphics
+    /// submission the command processor runs after EndGuestFrame.
+    void BeginGuestRenderSubmit();
+
+    /// Holds the present of a guest frame until the GPU finished it and its paced present time
+    /// came, when VRR pacing is enabled and the display follows the frames.
+    void PaceVrrPresent(u64 present_tick, s64 latch_ns);
 
     /// Times the end of the presentation work of each guest frame on the GPU.
     void PresentReadyThread(std::stop_token token);
@@ -234,7 +250,12 @@ private:
 
     /// Guest frame the command processor is building.
     u64 gcp_frame_id{1};
+    /// Whether the render submission of gcp_frame_id waits for its first graphics submission.
+    bool render_submit_pending{};
     vk::UniqueSemaphore reflex_semaphore;
+    std::mutex reflex_mutex;
+    /// Guest frame the game is simulating; advances with each flip it submits.
+    u64 guest_frame_id{1};
     u64 reflex_sleep_value{};
     bool reflex_timeout_logged{};
 
@@ -247,6 +268,8 @@ private:
         u64 swapchain_serial;
         s64 latch_ns;
         s64 ready_ns;
+        /// When the frame was handed to the presentation engine.
+        s64 present_ns;
     };
     static constexpr std::size_t MaxPendingPresentWaits = 8;
     std::mutex present_wait_mutex;
@@ -271,6 +294,7 @@ private:
     std::mutex pacing_mutex;
     PacingState pacing{};
     DisplayPacer display_pacer;
+    VrrPacer vrr_pacer;
     std::atomic<bool> display_locked{};
     std::atomic<u64> correction_seq{};
     std::atomic<s64> correction_ns{};
