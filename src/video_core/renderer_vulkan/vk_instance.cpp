@@ -225,7 +225,8 @@ bool Instance::CreateDevice() {
                           vk::PhysicalDevicePresentWait2FeaturesKHR,
                           vk::PhysicalDevicePresentIdFeaturesKHR,
                           vk::PhysicalDevicePresentWaitFeaturesKHR,
-                          vk::PhysicalDeviceRawAccessChainsFeaturesNV>();
+                          vk::PhysicalDeviceRawAccessChainsFeaturesNV,
+                          vk::PhysicalDeviceConditionalRenderingFeaturesEXT>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -383,6 +384,15 @@ bool Instance::CreateDevice() {
     }
     image_view_min_lod = add_extension(VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME);
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
+    conditional_rendering = add_extension(VK_EXT_CONDITIONAL_RENDERING_EXTENSION_NAME);
+    if (conditional_rendering) {
+        conditional_rendering_features =
+            feature_chain.get<vk::PhysicalDeviceConditionalRenderingFeaturesEXT>();
+        LOG_INFO(Render_Vulkan, "- conditionalRendering: {}",
+                 conditional_rendering_features.conditionalRendering);
+        LOG_INFO(Render_Vulkan, "- inheritedConditionalRendering: {}",
+                 conditional_rendering_features.inheritedConditionalRendering);
+    }
     swapchain_maintenance1 = surface_maintenance1 &&
                              add_extension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) &&
                              feature_chain.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>()
@@ -635,6 +645,11 @@ bool Instance::CreateDevice() {
         vk::PhysicalDevicePresentWaitFeaturesKHR{
             .presentWait = true,
         },
+        vk::PhysicalDeviceConditionalRenderingFeaturesEXT{
+            .conditionalRendering = conditional_rendering_features.conditionalRendering,
+            .inheritedConditionalRendering =
+                conditional_rendering_features.inheritedConditionalRendering,
+        },
     };
 
     if (!custom_border_color) {
@@ -693,6 +708,9 @@ bool Instance::CreateDevice() {
     if (!present_wait) {
         device_chain.unlink<vk::PhysicalDevicePresentIdFeaturesKHR>();
         device_chain.unlink<vk::PhysicalDevicePresentWaitFeaturesKHR>();
+    }
+    if (!conditional_rendering) {
+        device_chain.unlink<vk::PhysicalDeviceConditionalRenderingFeaturesEXT>();
     }
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
