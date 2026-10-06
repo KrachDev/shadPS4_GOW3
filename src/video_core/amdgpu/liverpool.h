@@ -9,10 +9,12 @@
 #include <deque>
 #include <exception>
 #include <mutex>
+#include <optional>
 #include <queue>
 #include <semaphore>
 #include <span>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "common/assert.h"
@@ -177,6 +179,20 @@ public:
     };
     Common::SlotVector<AscQueueInfo> asc_queues{};
 
+    [[nodiscard]] bool IsDrawPredicated() const noexcept {
+        return predication.enabled && predication.is_packet_predicated &&
+               (predication.address != 0);
+    }
+
+    [[nodiscard]] VAddr GetPredicationAddress() const noexcept {
+        return predication.address;
+    }
+
+    [[nodiscard]] bool IsPredicationInverted() const noexcept {
+        return predication.inverted;
+    }
+
+
 private:
     struct Task {
         struct promise_type {
@@ -314,12 +330,30 @@ private:
     u32 pending_gpu_completion_count{};
     u32 pending_gpu_fence_word_count{};
 
+    struct PredicationState {
+        bool enabled{false};
+        VAddr address{0};
+        bool inverted{false};
+        bool hint{false};
+        bool continue_bit{false};
+        bool is_packet_predicated{false};
+    } predication{};
+
+    std::optional<std::pair<u32, u32>> saved_index_base{};
+    void RestorePredicatedIndexBase() {
+        if (!saved_index_base) {
+            return;
+        }
+        regs.index_base_address.base_addr_lo = saved_index_base->first;
+        regs.index_base_address.base_addr_hi = saved_index_base->second;
+        saved_index_base.reset();
+    }
+
     VAddr indirect_args_addr{};
     u32 num_counter_pairs{};
     u64 pixel_counter{};
     u64 graphics_pipeline_generation{1};
     u64 graphics_state_generation{1};
-    bool warned_set_predication{};
 
     struct ConstantEngine {
         void Reset() {

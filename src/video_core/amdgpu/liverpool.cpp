@@ -207,24 +207,8 @@ static SHAD_NO_INLINE void GraphicsPacketAssertionFailed() {
     UNREACHABLE();
 }
 
-static SHAD_NO_INLINE void WarnStrmoutBufferUpdate(const PM4CmdStrmoutBufferUpdate& packet) {
-    LOG_WARNING(Render_Vulkan,
-                "Unimplemented IT_STRMOUT_BUFFER_UPDATE, update_memory = {}, "
-                "source_select = {}, buffer_select = {}",
-                packet.update_memory.Value(), magic_enum::enum_name(packet.source_select.Value()),
-                packet.buffer_select.Value());
-}
-
 static SHAD_NO_INLINE void WarnGetLodStats() {
     LOG_WARNING(Render_Vulkan, "Unimplemented IT_GET_LOD_STATS");
-}
-
-static SHAD_NO_INLINE void WarnReservedCondExec() {
-    LOG_WARNING(Render, "IT_COND_EXEC used a reserved command");
-}
-
-static SHAD_NO_INLINE void WarnSetPredication() {
-    LOG_WARNING(Render, "Unimplemented IT_SET_PREDICATION");
 }
 
 static SHAD_NO_INLINE void WarnCopyData(const PM4CmdCopyData& packet) {
@@ -1310,6 +1294,7 @@ SHAD_NO_INLINE void Liverpool::ProcessGraphicsEventWrite(const PM4Header* header
             *results = counter_value;
         }
         if (rasterizer) {
+            rasterizer->InvalidateMemory(result_address, counter_pairs * 2 * sizeof(u64));
             rasterizer->NotifyMemoryWrite(result_address, counter_pairs * 2 * sizeof(u64),
                                           VideoCore::MemoryWriteSource::CommandProcessor);
         }
@@ -1356,6 +1341,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
 
         if (type != 3) [[unlikely]] {
             dcb = NextNonType3Packet(dcb, type, regs);
+            if (type == 0) {
+                ++graphics_pipeline_generation;
+                ++graphics_state_generation;
+            }
             continue;
         }
 
@@ -1363,6 +1352,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             const u32 count = ((header_raw >> 16) + 1) & 0x3fff;
             u32 packet_words = count + 1;
             const auto opcode = static_cast<PM4ItOpcode>((header_raw >> 8) & 0xff);
+            predication.is_packet_predicated =
+                (header->type3.predicate == PM4Predicate::PredEnable);
             switch (opcode) {
             case PM4ItOpcode::Nop: {
                 const auto* nop = reinterpret_cast<const PM4CmdNop*>(header);
@@ -1422,6 +1413,8 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 regs.SetDefaults();
                 ++graphics_pipeline_generation;
                 ++graphics_state_generation;
+                predication = {};
+                saved_index_base.reset();
                 break;
             }
             case PM4ItOpcode::SetConfigReg: {
@@ -1503,9 +1496,46 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 break;
             }
             case PM4ItOpcode::SetPredication: {
-                if (!warned_set_predication) {
-                    warned_set_predication = true;
-                    WarnSetPredication();
+                const auto* set_pred = reinterpret_cast<const PM4CmdSetPredication*>(header);
+                const bool is_continue = (set_pred->continue_bit.Value() == 1);
+                if (!is_continue) {
+                    RestorePredicatedIndexBase();
+                }
+                LOG_DEBUG(
+                    Render,
+                    "IT_SET_PREDICATION pred_op = {}, draw_op = {}, hint = {}, continue = {}, "
+                    "addr = {:#x}",
+                    magic_enum::enum_name(set_pred->pred_op.Value()), set_pred->draw_op.Value(),
+                    set_pred->hint.Value(), set_pred->continue_bit.Value(), set_pred->Address());
+                switch (set_pred->pred_op.Value()) {
+                case PM4CmdSetPredication::PredOp::Disable:
+                    predication.enabled = false;
+                    predication.address = 0;
+                    predication.inverted = false;
+                    predication.hint = false;
+                    predication.continue_bit = false;
+                    RestorePredicatedIndexBase();
+                    break;
+                case PM4CmdSetPredication::PredOp::Zpass:
+                case PM4CmdSetPredication::PredOp::PrimCount:
+                case PM4CmdSetPredication::PredOp::Bool64:
+                case PM4CmdSetPredication::PredOp::Bool32:
+                    predication.enabled = true;
+                    predication.address = set_pred->Address();
+                    predication.inverted = (set_pred->draw_op.Value() == 1);
+                    predication.hint = (set_pred->hint.Value() == 1);
+                    predication.continue_bit = is_continue;
+                    break;
+                default:
+                    LOG_WARNING(Render, "Unknown IT_SET_PREDICATION pred_op {} addr={:#x}",
+                                static_cast<u32>(set_pred->pred_op.Value()), set_pred->Address());
+                    predication.enabled = false;
+                    predication.address = 0;
+                    predication.inverted = false;
+                    predication.hint = false;
+                    predication.continue_bit = false;
+                    RestorePredicatedIndexBase();
+                    break;
                 }
                 break;
             }
@@ -1516,6 +1546,15 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             }
             case PM4ItOpcode::DrawIndex2: {
                 const auto* draw_index = reinterpret_cast<const PM4CmdDrawIndex2*>(header);
+                if (predication.is_packet_predicated && predication.enabled) {
+                    if (!saved_index_base) {
+                        saved_index_base.emplace(
+                            static_cast<u32>(regs.index_base_address.base_addr_lo),
+                            static_cast<u32>(regs.index_base_address.base_addr_hi));
+                    }
+                } else {
+                    saved_index_base.reset();
+                }
                 regs.max_index_size = draw_index->max_size;
                 regs.index_base_address.base_addr_lo = draw_index->index_base_lo;
                 regs.index_base_address.base_addr_hi = draw_index->index_base_hi;
@@ -1741,6 +1780,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             }
             case PM4ItOpcode::IndexBase: {
                 const auto* index_base = reinterpret_cast<const PM4CmdDrawIndexBase*>(header);
+                saved_index_base.reset();
                 regs.index_base_address.base_addr_lo = index_base->addr_lo;
                 regs.index_base_address.base_addr_hi = index_base->addr_hi;
                 break;
@@ -1819,6 +1859,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 if (!write_data->wr_one_addr.Value()) {
                     OrderAfterSkippedSignals();
                     PrepareGuestWrite(address, data_size);
+                    if (rasterizer) {
+                        rasterizer->InvalidateMemory(write_data->Address<VAddr>(), data_size);
+                    }
                     std::memcpy(address, write_data->data, data_size);
                     if (rasterizer) {
                         rasterizer->NotifyMemoryWrite(
@@ -2022,9 +2065,17 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
             case PM4ItOpcode::CondExec: {
                 const auto* cond_exec = reinterpret_cast<const PM4CmdCondExec*>(header);
                 if (cond_exec->command.Value() != 0) {
-                    WarnReservedCondExec();
+                    LOG_WARNING(Render, "IT_COND_EXEC used a reserved command {}",
+                                cond_exec->command.Value());
                 }
-                const auto skip = *cond_exec->Address() == false;
+                const VAddr address = cond_exec->Address();
+                bool skip = false;
+                auto* memory = Core::Memory::Instance();
+                if (address != 0 && memory->IsValidMapping(address, sizeof(u32))) {
+                    skip = (*reinterpret_cast<const u32*>(address) == 0);
+                } else {
+                    LOG_WARNING(Render, "IT_COND_EXEC: invalid condition address {:#x}", address);
+                }
                 if (skip) {
                     packet_words += cond_exec->exec_count.Value();
                 }
@@ -2159,6 +2210,8 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid, u3
                             base, Regs::NumRegs);
             }
 
+            ++graphics_pipeline_generation;
+            ++graphics_state_generation;
             acb = NextPacket(acb, total_packet_dwords);
             if constexpr (!is_indirect) {
                 *queue.read_addr += total_packet_dwords;
@@ -2185,6 +2238,7 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid, u3
         }
 
         const PM4ItOpcode opcode = header->type3.opcode;
+        predication.is_packet_predicated = (header->type3.predicate == PM4Predicate::PredEnable);
 
         switch (opcode) {
         case PM4ItOpcode::Nop: {
@@ -2284,6 +2338,45 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid, u3
             const auto* set_data = reinterpret_cast<const PM4CmdSetQueueReg*>(header);
             LOG_WARNING(Render, "Encountered compute SetQueueReg: vqid = {}, reg_offset = {:#x}",
                         set_data->vqid.Value(), set_data->reg_offset.Value());
+            break;
+        }
+        case PM4ItOpcode::SetPredication: {
+            const auto* set_pred = reinterpret_cast<const PM4CmdSetPredication*>(header);
+            const bool is_continue = (set_pred->continue_bit.Value() == 1);
+            LOG_DEBUG(
+                Render,
+                "compute IT_SET_PREDICATION pred_op = {}, draw_op = {}, hint = {}, continue = "
+                "{}, addr = {:#x}",
+                magic_enum::enum_name(set_pred->pred_op.Value()), set_pred->draw_op.Value(),
+                set_pred->hint.Value(), set_pred->continue_bit.Value(), set_pred->Address());
+            switch (set_pred->pred_op.Value()) {
+            case PM4CmdSetPredication::PredOp::Disable:
+                predication.enabled = false;
+                predication.address = 0;
+                predication.inverted = false;
+                predication.hint = false;
+                predication.continue_bit = false;
+                break;
+            case PM4CmdSetPredication::PredOp::Zpass:
+            case PM4CmdSetPredication::PredOp::PrimCount:
+            case PM4CmdSetPredication::PredOp::Bool64:
+            case PM4CmdSetPredication::PredOp::Bool32:
+                predication.enabled = true;
+                predication.address = set_pred->Address();
+                predication.inverted = (set_pred->draw_op.Value() == 1);
+                predication.hint = (set_pred->hint.Value() == 1);
+                predication.continue_bit = is_continue;
+                break;
+            default:
+                LOG_WARNING(Render, "Unknown compute IT_SET_PREDICATION pred_op {} addr={:#x}",
+                            static_cast<u32>(set_pred->pred_op.Value()), set_pred->Address());
+                predication.enabled = false;
+                predication.address = 0;
+                predication.inverted = false;
+                predication.hint = false;
+                predication.continue_bit = false;
+                break;
+            }
             break;
         }
         case PM4ItOpcode::DispatchDirect: {
