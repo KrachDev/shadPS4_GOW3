@@ -24,9 +24,10 @@ void assert_fail_impl();
 
 namespace Common::Detail {
 
+// noexcept: a failure path must not add unwind edges or terminate funclets to its callers.
 template <typename... Args>
 SHAD_NO_INLINE void AssertFail(const char* file, int line, const char* func,
-                               fmt::format_string<Args...> format, Args... args) {
+                               fmt::format_string<Args...> format, Args... args) noexcept {
     Common::Log::VLog(Common::Log::Class::Debug, Common::Log::Level::Critical, file, line, func,
                       format, fmt::make_format_args(args...));
     assert_fail_impl();
@@ -34,7 +35,8 @@ SHAD_NO_INLINE void AssertFail(const char* file, int line, const char* func,
 
 template <typename... Args>
 [[noreturn]] SHAD_NO_INLINE void UnreachableFail(const char* file, int line, const char* func,
-                                                 fmt::format_string<Args...> format, Args... args) {
+                                                 fmt::format_string<Args...> format,
+                                                 Args... args) noexcept {
     Common::Log::VLog(Common::Log::Class::Debug, Common::Log::Level::Critical, file, line, func,
                       format, fmt::make_format_args(args...));
     unreachable_impl();
@@ -45,7 +47,7 @@ template <typename... Args>
 #define ASSERT(_a_)                                                                                \
     do {                                                                                           \
         if (!(_a_)) [[unlikely]] {                                                                 \
-            [&, shad_func_ = __func__]() SHAD_NO_INLINE {                                          \
+            [&, shad_func_ = __func__]() SHAD_NO_INLINE noexcept {                                 \
                 Common::Detail::AssertFail(__FILE__, __LINE__, __func__, "Assertion Failed!\n");   \
             }();                                                                                   \
         }                                                                                          \

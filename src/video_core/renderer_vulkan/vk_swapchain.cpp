@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <limits>
 #include <utility>
 #include "common/assert.h"
 #include "common/logging/log.h"
+#include "common/thread.h"
 #include "core/emulator_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
@@ -205,9 +207,20 @@ void Swapchain::SetHDR(bool hdr) {
 
 bool Swapchain::AcquireNextImage() {
     vk::Device device = instance.GetDevice();
-    vk::Result result =
-        device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
-                                   image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
+    vk::Result result;
+    // Acquire is externally synchronized with the present wait and latency calls of other
+    // threads, so the handle is held exclusively only for non-blocking attempts.
+    while (true) {
+        {
+            std::unique_lock handle_lock{handle_mutex};
+            result = device.acquireNextImageKHR(swapchain, 0, image_acquired[frame_index],
+                                                VK_NULL_HANDLE, &image_index);
+        }
+        if (result != vk::Result::eNotReady && result != vk::Result::eTimeout) {
+            break;
+        }
+        Common::AccurateSleep(std::chrono::microseconds{100}, nullptr, false);
+    }
 
     switch (result) {
     case vk::Result::eSuccess:
@@ -273,9 +286,11 @@ bool Swapchain::Present(const u64 present_id) {
         .pImageIndices = &image_index,
     };
 
+    std::unique_lock handle_lock{handle_mutex};
     std::unique_lock queue_lock{instance.GetPresentQueueMutex()};
     const auto result = instance.GetPresentQueue().presentKHR(present_info);
     queue_lock.unlock();
+    handle_lock.unlock();
     if (instance.HasSwapchainMaintenance1() &&
         (result == vk::Result::eSuccess || result == vk::Result::eSuboptimalKHR)) {
         present_fence_pending[image_index] = true;
@@ -292,9 +307,11 @@ bool Swapchain::Present(const u64 present_id) {
     return !needs_recreation;
 }
 
-vk::Result Swapchain::WaitForPresent(const u64 swapchain_serial, const u64 present_id,
-                                     const u64 timeout_ns) const {
-    std::shared_lock handle_lock{handle_mutex};
+vk::Result Swapchain::PollPresent(const u64 swapchain_serial, const u64 present_id) const {
+    // The wait is externally synchronized with acquire, present and the latency calls; a zero
+    // timeout keeps the exclusive hold short.
+    constexpr u64 timeout_ns = 0;
+    std::unique_lock handle_lock{handle_mutex};
     if (!present_wait_active || !swapchain ||
         serial.load(std::memory_order_acquire) != swapchain_serial) {
         return vk::Result::eErrorOutOfDateKHR;

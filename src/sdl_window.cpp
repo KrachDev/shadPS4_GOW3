@@ -1,10 +1,12 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_properties.h>
+#include <SDL3/SDL_surface.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 #include <cmrc/cmrc.hpp>
@@ -92,6 +94,41 @@ static Uint32 SDLCALL PollControllerLightColour(void* userdata, SDL_TimerID time
     auto* controller = reinterpret_cast<Input::GameController*>(userdata);
     controller->PollLightColour();
     return interval;
+}
+
+void ShowEarlySplash(SDL_Window* window, std::span<const u8> png_data) {
+    if (png_data.empty() || !EmulatorSettings.IsShowSplash()) {
+        return;
+    }
+    // A software blit into the game window covers the Vulkan startup. The framebuffer is
+    // released right away; the pixels stay on screen until the swapchain presents.
+    SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "0");
+    SDL_SyncWindow(window);
+    int image_width = 0;
+    int image_height = 0;
+    unsigned char* pixels = stbi_load_from_memory(
+        png_data.data(), static_cast<int>(png_data.size()), &image_width, &image_height, nullptr, 4);
+    SDL_Surface* image = pixels ? SDL_CreateSurfaceFrom(image_width, image_height,
+                                                        SDL_PIXELFORMAT_RGBA32, pixels,
+                                                        image_width * 4)
+                                : nullptr;
+    SDL_Surface* output = SDL_GetWindowSurface(window);
+    if (image != nullptr && output != nullptr) {
+        int width = output->w;
+        int height = output->h;
+        const double scale = std::min(static_cast<double>(width) / image_width,
+                                      static_cast<double>(height) / image_height);
+        const int draw_width = std::max(1, static_cast<int>(image_width * scale));
+        const int draw_height = std::max(1, static_cast<int>(image_height * scale));
+        const SDL_Rect rect{(width - draw_width) / 2, (height - draw_height) / 2, draw_width,
+                            draw_height};
+        SDL_FillSurfaceRect(output, nullptr, 0);
+        SDL_BlitSurfaceScaled(image, nullptr, output, &rect, SDL_SCALEMODE_LINEAR);
+        SDL_UpdateWindowSurface(window);
+    }
+    SDL_DestroySurface(image);
+    stbi_image_free(pixels);
+    SDL_DestroyWindowSurface(window);
 }
 
 WindowSDL::WindowSDL(s32 width_, s32 height_, Input::GameControllers* controllers_,

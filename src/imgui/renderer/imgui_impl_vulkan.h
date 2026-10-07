@@ -52,7 +52,7 @@ struct UploadTextureData {
     vk::Buffer upload_buffer;
     vk::DeviceMemory upload_buffer_memory;
 
-    ImTextureID im_texture;
+    ImTextureID im_texture{};
 
     void Upload();
 

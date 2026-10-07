@@ -35,12 +35,13 @@ void UpdateLogFlushLevel(std::string_view log_flush_level);
     return level >= g_class_levels[static_cast<std::size_t>(log_class)];
 }
 
+/// Never throws, so logging adds no unwind edges to its callers.
 void VLog(Class log_class, Level level, const char* file, int line, const char* func,
-          fmt::string_view format, fmt::format_args args);
+          fmt::string_view format, fmt::format_args args) noexcept;
 
 template <typename... Args>
 void Log(Class log_class, Level level, const char* file, int line, const char* func,
-         fmt::format_string<Args...> format, Args&&... args) {
+         fmt::format_string<Args...> format, Args&&... args) noexcept {
     VLog(log_class, level, file, line, func, format, fmt::make_format_args(args...));
 }
 

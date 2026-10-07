@@ -30,6 +30,7 @@ set(SHADER_FILES
     cmaa2_3.comp
 
     post_process.frag
+    startup_probe.comp
     tiling.comp
 )
 

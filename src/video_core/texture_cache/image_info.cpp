@@ -18,6 +18,11 @@ using namespace Vulkan;
 using Libraries::VideoOut::TilingMode;
 using VideoOutFormat = Libraries::VideoOut::PixelFormat;
 
+/// Out of line and noexcept so the constructors need no unwind state for the HLE call.
+static SHAD_NO_INLINE bool IsNeoMode() noexcept {
+    return Libraries::Kernel::sceKernelIsNeoMode() != 0;
+}
+
 static vk::Format ConvertPixelFormat(const VideoOutFormat format) {
     switch (format) {
     case VideoOutFormat::A8B8G8R8Srgb:
@@ -81,7 +86,7 @@ ImageInfo::ImageInfo(const AmdGpu::ColorBuffer& buffer, AmdGpu::CbDbExtent hint)
         guest_size *= resources.layers;
         mips_layout[0] = MipInfo(guest_size, pitch, size.height, 0);
     }
-    alt_tile = Libraries::Kernel::sceKernelIsNeoMode() && buffer.info.alt_tile_mode;
+    alt_tile = buffer.info.alt_tile_mode && IsNeoMode();
 }
 
 ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr htile_address,
@@ -142,7 +147,7 @@ ImageInfo::ImageInfo(const AmdGpu::Image& image, const Shader::ImageResource& de
 
     guest_address = image.Address();
 
-    alt_tile = Libraries::Kernel::sceKernelIsNeoMode() && image.alt_tile_mode;
+    alt_tile = image.alt_tile_mode && IsNeoMode();
     UpdateSize();
 }
 
@@ -152,7 +157,7 @@ bool ImageInfo::IsCompatible(const ImageInfo& info) const {
            num_samples == info.num_samples && num_bits == info.num_bits;
 }
 
-void ImageInfo::UpdateSize() {
+void ImageInfo::UpdateSize() noexcept {
     guest_size = 0;
     for (s32 mip = 0; mip < resources.levels; ++mip) {
         u32 mip_w = pitch >> mip;

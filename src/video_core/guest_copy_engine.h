@@ -91,7 +91,7 @@ public:
     };
 
     /// Returns true when any page of the range currently denies reads.
-    using ReadProtectionProbe = bool (*)(const void* context, VAddr addr, u64 size);
+    using ReadProtectionProbe = bool (*)(const void* context, VAddr addr, u64 size) noexcept;
 
     /// Serves a guest copy whose source denies reads without touching the protected pages, for
     /// example by recording GPU commands that write some of the bytes into op.dst_buffer. On
@@ -102,7 +102,13 @@ public:
                                            std::span<Op, MaxResolverRemainder> remainder,
                                            u32& remainder_count, u64& gpu_bytes);
 
-    static GuestCopyEngine& Instance();
+    /// A plain load once created; the first call constructs the engine out of line.
+    static GuestCopyEngine& Instance() noexcept {
+        if (auto* const engine = instance.load(std::memory_order_acquire)) [[likely]] {
+            return *engine;
+        }
+        return CreateInstance();
+    }
 
     GuestCopyEngine(const GuestCopyEngine&) = delete;
     GuestCopyEngine& operator=(const GuestCopyEngine&) = delete;
@@ -244,7 +250,10 @@ private:
         return value & (PendingTableSize - 1);
     }
 
-    static thread_local bool is_producer_thread;
+    static constinit thread_local bool is_producer_thread;
+    static inline std::atomic<GuestCopyEngine*> instance{};
+
+    static GuestCopyEngine& CreateInstance() noexcept;
 
     std::unique_ptr<std::array<Slot, SlotCount>> slots;
     std::unique_ptr<std::array<std::atomic<u32>, PendingTableSize>> pending_reads;

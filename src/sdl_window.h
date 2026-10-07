@@ -104,6 +104,8 @@ private:
     std::atomic<s64> display_refresh_period_ns{};
 };
 
+void ShowEarlySplash(SDL_Window* window, std::span<const u8> png_data);
+
 void SetWindowIcon(SDL_Window* window, const std::vector<u8>& png);
 void SetDefaultWindowIcon(SDL_Window* window);
 

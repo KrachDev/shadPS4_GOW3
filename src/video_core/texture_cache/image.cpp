@@ -431,15 +431,16 @@ static void RecordImageAccess(Image::State& state, vk::ImageLayout dst_layout,
     state.access_mask = dst_mask;
 }
 
-static SHAD_NO_INLINE Image::Barriers GetBarriersSlow(
-    Image& image, const vk::ImageLayout dst_layout, const vk::AccessFlags2 dst_mask,
-    const vk::PipelineStageFlags2 dst_stage,
+static SHAD_NO_INLINE void AppendBarriersSlow(
+    Image::Barriers& barriers, Image& image, const vk::ImageLayout dst_layout,
+    const vk::AccessFlags2 dst_mask, const vk::PipelineStageFlags2 dst_stage,
     const std::optional<SubresourceRange> subres_range, const bool needs_partial_transition) {
     auto& last_state = image.backing->state;
     auto& subresource_states = image.backing->subresource_states;
     const bool partially_transited = !subresource_states.empty();
 
-    Image::Barriers barriers;
+    // Only barriers of this transition merge with each other.
+    const size_t first_barrier = barriers.size();
     const auto transition = [&](Image::State& state, vk::ImageSubresourceRange range) {
         if (!IsStateTransitionRedundant(state, dst_layout, dst_mask, dst_stage)) {
             const vk::ImageMemoryBarrier2 barrier{
@@ -454,7 +455,7 @@ static SHAD_NO_INLINE Image::Barriers GetBarriersSlow(
                 .image = image.GetImage(),
                 .subresourceRange = range,
             };
-            if (!barriers.empty()) {
+            if (barriers.size() > first_barrier) {
                 auto merged = barriers.back();
                 merged.subresourceRange = range;
                 if (merged == barrier &&
@@ -527,12 +528,10 @@ static SHAD_NO_INLINE Image::Barriers GetBarriersSlow(
             .layerCount = VK_REMAINING_ARRAY_LAYERS,
         });
     }
-
-    return barriers;
 }
 
 /// Whether a transition of the whole image already in dst_layout with dst_mask, and not
-/// written, needs no barrier: the case GetBarriers answers without building barriers.
+/// written, needs no barrier: the case AppendBarriers answers without building barriers.
 static bool IsTransitionRedundant(const Image& image, const vk::ImageLayout dst_layout,
                                   const vk::AccessFlags2 dst_mask,
                                   const vk::PipelineStageFlags2 dst_stage,
@@ -549,16 +548,16 @@ static bool NeedsPartialTransition(const Image& image,
                             subres_range->extent != image.info.resources);
 }
 
-Image::Barriers Image::GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
-                                   vk::PipelineStageFlags2 dst_stage,
-                                   std::optional<SubresourceRange> subres_range) {
+void Image::AppendBarriers(Barriers& barriers, vk::ImageLayout dst_layout,
+                           vk::AccessFlags2 dst_mask, vk::PipelineStageFlags2 dst_stage,
+                           std::optional<SubresourceRange> subres_range) {
     const bool needs_partial_transition = NeedsPartialTransition(*this, subres_range);
     if (IsTransitionRedundant(*this, dst_layout, dst_mask, dst_stage, needs_partial_transition)) {
         RecordImageAccess(backing->state, dst_layout, dst_mask, dst_stage);
-        return {};
+        return;
     }
-    return GetBarriersSlow(*this, dst_layout, dst_mask, dst_stage, subres_range,
-                           needs_partial_transition);
+    AppendBarriersSlow(barriers, *this, dst_layout, dst_mask, dst_stage, subres_range,
+                       needs_partial_transition);
 }
 
 /// The part of Transit that builds and records barriers, out of line so that a redundant
@@ -568,8 +567,9 @@ static SHAD_NO_INLINE void TransitSlow(Image& image, const vk::ImageLayout dst_l
                                        const vk::PipelineStageFlags2 dst_pl_stage,
                                        const std::optional<SubresourceRange> range,
                                        const bool needs_partial_transition) {
-    const auto barriers =
-        GetBarriersSlow(image, dst_layout, dst_mask, dst_pl_stage, range, needs_partial_transition);
+    Image::Barriers barriers;
+    AppendBarriersSlow(barriers, image, dst_layout, dst_mask, dst_pl_stage, range,
+                       needs_partial_transition);
     if (barriers.empty()) {
         return;
     }
@@ -622,12 +622,11 @@ void Image::Upload(std::span<const vk::BufferImageCopy> upload_copies, vk::Buffe
 
     Barriers image_barriers;
     for (const auto& copy : upload_copies) {
-        const auto barriers = GetBarriers(
-            vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite,
-            vk::PipelineStageFlagBits2::eCopy,
+        AppendBarriers(
+            image_barriers, vk::ImageLayout::eTransferDstOptimal,
+            vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eCopy,
             SubresourceRange{{copy.imageSubresource.mipLevel, copy.imageSubresource.baseArrayLayer},
                              {1, copy.imageSubresource.layerCount}});
-        image_barriers.insert(image_barriers.end(), barriers.begin(), barriers.end());
     }
     const auto cmdbuf = scheduler->CommandBuffer();
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
@@ -668,12 +667,11 @@ void Image::Download(std::span<const vk::BufferImageCopy> download_copies, vk::B
     };
     Barriers image_barriers;
     for (const auto& copy : download_copies) {
-        const auto barriers = GetBarriers(
-            vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead,
-            vk::PipelineStageFlagBits2::eCopy,
+        AppendBarriers(
+            image_barriers, vk::ImageLayout::eTransferSrcOptimal,
+            vk::AccessFlagBits2::eTransferRead, vk::PipelineStageFlagBits2::eCopy,
             SubresourceRange{{copy.imageSubresource.mipLevel, copy.imageSubresource.baseArrayLayer},
                              {1, copy.imageSubresource.layerCount}});
-        image_barriers.insert(image_barriers.end(), barriers.begin(), barriers.end());
     }
     auto cmdbuf = scheduler->CommandBuffer();
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
@@ -1072,9 +1070,10 @@ SHAD_NO_INLINE void Image::SwapBackingSamples(u32 num_samples, bool copy_backing
         ASSERT(info.resources.levels == 1 && info.resources.layers == 1);
 
         // Transition current backing to shader read layout
-        auto barriers =
-            GetBarriers(vk::ImageLayout::eShaderReadOnlyOptimal, vk::AccessFlagBits2::eShaderRead,
-                        vk::PipelineStageFlagBits2::eFragmentShader, std::nullopt);
+        Barriers barriers;
+        AppendBarriers(barriers, vk::ImageLayout::eShaderReadOnlyOptimal,
+                       vk::AccessFlagBits2::eShaderRead,
+                       vk::PipelineStageFlagBits2::eFragmentShader, std::nullopt);
 
         // Transition dest backing to color attachment layout, not caring of previous contents
         constexpr auto dst_stage = vk::PipelineStageFlagBits2::eColorAttachmentOutput;

@@ -608,10 +608,10 @@ void TileManager::TileImage(Image& in_image, std::span<vk::BufferImageCopy> buff
         scheduler.DeferOperation([device, view] { device.destroyImageView(view); });
 
         const auto cmdbuf = scheduler.CommandBuffer();
-        const auto image_barriers =
-            in_image.GetBarriers(vk::ImageLayout::eShaderReadOnlyOptimal,
-                                 vk::AccessFlagBits2::eShaderRead,
-                                 vk::PipelineStageFlagBits2::eComputeShader, {});
+        Image::Barriers image_barriers;
+        in_image.AppendBarriers(image_barriers, vk::ImageLayout::eShaderReadOnlyOptimal,
+                                vk::AccessFlagBits2::eShaderRead,
+                                vk::PipelineStageFlagBits2::eComputeShader, {});
         if (!image_barriers.empty()) {
             cmdbuf.pipelineBarrier2(vk::DependencyInfo{
                 .dependencyFlags = vk::DependencyFlagBits::eByRegion,

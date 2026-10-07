@@ -109,6 +109,8 @@ Instance::Instance(Frontend::WindowSystemType window_type, s32 physical_device_i
     shutdown_overlay = false;
     surface_capabilities2 =
         IsInstanceExtensionEnabled(window_type, VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+    surface_maintenance1 =
+        IsInstanceExtensionEnabled(window_type, VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     if (enable_validation) {
         debug_callback = CreateDebugCallback(*instance);
     }
@@ -288,7 +290,9 @@ bool Instance::CreateDevice() {
     const auto& limits = properties.limits;
     const bool uniform_layout =
         feature_chain.get<vk::PhysicalDeviceVulkan12Features>().uniformBufferStandardLayout;
+    // The gain is NVIDIA's constant bank; elsewhere UBOs only add an untested path.
     uniform_buffer_shaders = EmulatorSettings.IsUniformBufferShadersEnabled() && uniform_layout &&
+                             driver_id == vk::DriverId::eNvidiaProprietary &&
                              limits.minUniformBufferOffsetAlignment <= 256 &&
                              limits.maxUniformBufferRange >
                                  limits.minUniformBufferOffsetAlignment &&
@@ -378,7 +382,8 @@ bool Instance::CreateDevice() {
     }
     image_view_min_lod = add_extension(VK_EXT_IMAGE_VIEW_MIN_LOD_EXTENSION_NAME);
     supports_memory_budget = add_extension(VK_EXT_MEMORY_BUDGET_EXTENSION_NAME);
-    swapchain_maintenance1 = add_extension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) &&
+    swapchain_maintenance1 = surface_maintenance1 &&
+                             add_extension(VK_EXT_SWAPCHAIN_MAINTENANCE_1_EXTENSION_NAME) &&
                              feature_chain.get<vk::PhysicalDeviceSwapchainMaintenance1FeaturesEXT>()
                                  .swapchainMaintenance1;
     // Present ids let the presenter wait for each frame to reach the display. The second

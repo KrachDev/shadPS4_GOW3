@@ -473,10 +473,13 @@ public:
     /// Discards the commands of the current command buffer. Shutdown only, after Finish.
     void ResetCommandBuffer();
 
-    /// Attempts to execute operations whose tick the GPU has caught up with.
     /// Runs the deferred operations the GPU has caught up with. Draws call this constantly, so
     /// unless force is set the GPU progress is only checked every few calls.
-    void PopPendingOperations(bool force = false);
+    void PopPendingOperations(bool force = false) {
+        if (pending_ops_front_tick.load(std::memory_order_acquire) != NoPendingOps) [[unlikely]] {
+            PopPendingOperationsSlow(force);
+        }
+    }
 
     /// Starts a new rendering scope with provided state.
     void BeginRendering(const RenderState& new_state) {
@@ -750,6 +753,7 @@ private:
     void RecordThread(std::stop_token stoken);
     void ExecuteWork(RecordWork& work);
     void SubmitRecorded(const SubmitRequest& request);
+    void PopPendingOperationsSlow(bool force);
 
 private:
     struct PushConstantCache {

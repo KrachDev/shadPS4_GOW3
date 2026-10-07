@@ -457,9 +457,12 @@ void BufferCache::BeginTransientReuse() {
         transient_reuse.clear();
         transient_reuse_pages.clear();
     }
-    if (!transient_invalidation_pending.load(std::memory_order_acquire)) {
-        return;
+    if (transient_invalidation_pending.load(std::memory_order_acquire)) [[unlikely]] {
+        ApplyTransientInvalidations();
     }
+}
+
+SHAD_NO_INLINE void BufferCache::ApplyTransientInvalidations() {
     std::scoped_lock lock{transient_invalidation_mutex};
     transient_invalidation_pending.store(false, std::memory_order_relaxed);
     for (const auto& [address, size] : transient_invalidations) {
@@ -1417,12 +1420,12 @@ void BufferCache::FinalizeVertexIndexBuffers(
         if (range.buffer == nullptr) [[unlikely]] {
             ValidateVertexIndexBuffer(range.buffer);
         }
-        if (range.was_gpu_modified) {
-            if (auto barrier =
-                    range.buffer->GetBarrier(vk::AccessFlagBits2::eVertexAttributeRead,
-                                             vk::PipelineStageFlagBits2::eVertexAttributeInput)) {
-                barriers.emplace_back(*barrier);
-            }
+        // Uploads leave their visibility to the next tracked access, and the next upload waits
+        // only for the reads recorded here.
+        if (auto barrier =
+                range.buffer->GetBarrier(vk::AccessFlagBits2::eVertexAttributeRead,
+                                         vk::PipelineStageFlagBits2::eVertexAttributeInput)) {
+            barriers.emplace_back(*barrier);
         }
     }
 
@@ -1446,11 +1449,9 @@ void BufferCache::FinalizeVertexIndexBuffers(
         if (index.buffer == nullptr) [[unlikely]] {
             ValidateVertexIndexBuffer(index.buffer);
         }
-        if (index.was_gpu_modified) {
-            if (auto barrier = index.buffer->GetBarrier(vk::AccessFlagBits2::eIndexRead,
-                                                        vk::PipelineStageFlagBits2::eIndexInput)) {
-                barriers.emplace_back(*barrier);
-            }
+        if (auto barrier = index.buffer->GetBarrier(vk::AccessFlagBits2::eIndexRead,
+                                                    vk::PipelineStageFlagBits2::eIndexInput)) {
+            barriers.emplace_back(*barrier);
         }
     }
 

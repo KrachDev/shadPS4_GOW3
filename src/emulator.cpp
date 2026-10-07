@@ -43,6 +43,7 @@
 #include "core/libraries/save_data/save_backup.h"
 #include "core/linker.h"
 #include "core/memory.h"
+#include "core/startup_progress.h"
 #include "core/user_settings.h"
 #include "emulator.h"
 #include "video_core/cache_storage.h"
@@ -485,6 +486,8 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         LOG_INFO(Loader, "No splash image found at /app0/sce_sys/pic1.png");
     }
 
+    Startup::progress.Begin();
+
     game_info.game_folder = game_folder;
 
     ASSERT_MSG(mnt->Exists(guest_eboot_path), "Guest app's main executable {} does not exist",
@@ -617,6 +620,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
                                                    window_title);
 
     g_window = window.get();
+    Frontend::ShowEarlySplash(window->GetSDLWindow(), game_info.GetSplashData());
 
     if (auto icon = mnt->ReadFile("/app0/sce_sys/icon0.png")) {
         window->SetIcon(*icon);
@@ -692,8 +696,12 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
 
     // Initialize kernel and library facilities.
     Libraries::InitHLELibs(&linker->GetHLESymbols());
+    // The presentation thread already runs, so the loading panel covers the cache warm-up.
+    Startup::progress.SetStage(Startup::Stage::Shaders);
+    presenter->PreloadPipelineCache();
 
     // Load the module with the linker.
+    Startup::progress.SetStage(Startup::Stage::Executable);
     if (linker->LoadModule(guest_eboot_path) == -1) {
         LOG_CRITICAL(Loader, "Failed to load game's eboot.bin: {}", guest_eboot_path);
         std::quick_exit(0);
@@ -721,6 +729,7 @@ void Emulator::Run(std::filesystem::path file, std::vector<std::string> args,
         });
     }
 
+    Startup::progress.SetStage(Startup::Stage::Modules);
     linker->Execute(args);
 
     window->InitTimers();

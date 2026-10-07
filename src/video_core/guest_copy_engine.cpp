@@ -22,6 +22,13 @@
 #define GUEST_COPY_PAUSE() std::this_thread::yield()
 #endif
 
+// Copies rarely span granules; unrolled granule loops only grow the prologue.
+#if defined(__clang__)
+#define GUEST_COPY_NO_UNROLL _Pragma("clang loop unroll(disable)")
+#else
+#define GUEST_COPY_NO_UNROLL
+#endif
+
 namespace VideoCore {
 
 namespace {
@@ -46,11 +53,12 @@ void AddProducerStat(std::atomic<u64>& counter, u64 value) noexcept {
 
 } // Anonymous namespace
 
-thread_local bool GuestCopyEngine::is_producer_thread = false;
+constinit thread_local bool GuestCopyEngine::is_producer_thread = false;
 
-GuestCopyEngine& GuestCopyEngine::Instance() {
-    static GuestCopyEngine instance;
-    return instance;
+SHAD_NO_INLINE GuestCopyEngine& GuestCopyEngine::CreateInstance() noexcept {
+    static GuestCopyEngine engine;
+    instance.store(&engine, std::memory_order_release);
+    return engine;
 }
 
 GuestCopyEngine::GuestCopyEngine()
@@ -348,10 +356,12 @@ void GuestCopyEngine::WaitCompleted(u64 seq) {
 }
 
 void GuestCopyEngine::AddReadIntent(VAddr addr, u64 size, bool add) noexcept {
+    auto* const counters = read_protect_intents->data();
     const u64 first = addr >> GranuleBits;
     const u64 last = (addr + size - 1) >> GranuleBits;
+    GUEST_COPY_NO_UNROLL
     for (u64 granule = first; granule <= last; ++granule) {
-        auto& counter = (*read_protect_intents)[PendingIndex(granule)];
+        auto& counter = counters[PendingIndex(granule)];
         if (add) {
             counter.fetch_add(1, std::memory_order_seq_cst);
         } else {
@@ -406,10 +416,12 @@ void GuestCopyEngine::EndReadProtect(VAddr addr, u64 size) noexcept {
 }
 
 bool GuestCopyEngine::IsReadProtected(VAddr addr, u64 size) const noexcept {
+    const auto* const counters = read_protect_intents->data();
     const u64 first = addr >> GranuleBits;
     const u64 last = (addr + size - 1) >> GranuleBits;
+    GUEST_COPY_NO_UNROLL
     for (u64 granule = first; granule <= last; ++granule) {
-        if ((*read_protect_intents)[PendingIndex(granule)].load(std::memory_order_acquire) != 0) {
+        if (counters[PendingIndex(granule)].load(std::memory_order_acquire) != 0) {
             return true;
         }
     }
@@ -533,10 +545,12 @@ void GuestCopyEngine::MarkPending(const Op& op, bool add) noexcept {
     if (op.kind == OpKind::Zero || op.size == 0) {
         return;
     }
+    auto* const counters = pending_reads->data();
     const u64 first = op.source >> GranuleBits;
     const u64 last = (op.source + op.size - 1) >> GranuleBits;
+    GUEST_COPY_NO_UNROLL
     for (u64 granule = first; granule <= last; ++granule) {
-        auto& counter = (*pending_reads)[PendingIndex(granule)];
+        auto& counter = counters[PendingIndex(granule)];
         if (add) {
             counter.fetch_add(1, std::memory_order_relaxed);
         } else {
@@ -546,10 +560,12 @@ void GuestCopyEngine::MarkPending(const Op& op, bool add) noexcept {
 }
 
 bool GuestCopyEngine::OverlapsPending(VAddr addr, u64 size) const noexcept {
+    const auto* const counters = pending_reads->data();
     const u64 first = addr >> GranuleBits;
     const u64 last = (addr + size - 1) >> GranuleBits;
+    GUEST_COPY_NO_UNROLL
     for (u64 granule = first; granule <= last; ++granule) {
-        if ((*pending_reads)[PendingIndex(granule)].load(std::memory_order_acquire) != 0) {
+        if (counters[PendingIndex(granule)].load(std::memory_order_acquire) != 0) {
             return true;
         }
     }

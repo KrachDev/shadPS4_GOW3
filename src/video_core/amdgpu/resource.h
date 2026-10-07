@@ -56,7 +56,7 @@ struct Buffer {
         return std::memcmp(this, &other, sizeof(Buffer)) == 0;
     }
 
-    CompMapping DstSelect() const {
+    CompMapping DstSelect() const noexcept {
         const CompMapping dst_sel{
             .r = CompSwizzle(dst_sel_x),
             .g = CompSwizzle(dst_sel_y),
@@ -207,7 +207,7 @@ struct Image {
         return base_address != 0;
     }
 
-    CompMapping DstSelect() const {
+    CompMapping DstSelect() const noexcept {
         const CompMapping dst_sel{
             .r = CompSwizzle(dst_sel_x),
             .g = CompSwizzle(dst_sel_y),

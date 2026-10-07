@@ -186,9 +186,10 @@ struct Image {
     ImageView& FindView(const ImageViewInfo& view_info, bool ensure_guest_samples = true);
 
     using Barriers = boost::container::small_vector<vk::ImageMemoryBarrier2, 32>;
-    Barriers GetBarriers(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
-                         vk::PipelineStageFlags2 dst_stage,
-                         std::optional<SubresourceRange> subres_range);
+    /// Records the transition and appends the barriers it needs to barriers.
+    void AppendBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
+                        vk::PipelineStageFlags2 dst_stage,
+                        std::optional<SubresourceRange> subres_range);
     void Transit(vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                  std::optional<SubresourceRange> range);
     void Upload(std::span<const vk::BufferImageCopy> upload_copies, vk::Buffer buffer);

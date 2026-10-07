@@ -56,7 +56,7 @@ struct ImageInfo {
     s32 SliceOf(const ImageInfo& info, s32 mip) const;
 
     bool IsCompatible(const ImageInfo& info) const;
-    void UpdateSize();
+    void UpdateSize() noexcept;
 
     struct {
         VAddr cmask_addr;

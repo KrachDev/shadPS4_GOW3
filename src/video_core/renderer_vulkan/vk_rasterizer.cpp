@@ -343,6 +343,25 @@ struct DynamicInputsCopy {
     }
 };
 
+/// memcmp equality that stays inline for the viewport arrays, which clang leaves to the CRT.
+template <size_t Size>
+[[nodiscard]] static bool SameBytes(const void* lhs, const void* rhs) noexcept {
+    if constexpr (Size >= 64 && Size % 32 == 0) {
+        const auto* a = static_cast<const u8*>(lhs);
+        const auto* b = static_cast<const u8*>(rhs);
+        __m256i difference = _mm256_setzero_si256();
+        for (size_t offset = 0; offset < Size; offset += 32) {
+            difference = _mm256_or_si256(
+                difference,
+                _mm256_xor_si256(_mm256_loadu_si256(reinterpret_cast<const __m256i*>(a + offset)),
+                                 _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b + offset))));
+        }
+        return _mm256_testz_si256(difference, difference) != 0;
+    } else {
+        return std::memcmp(lhs, rhs, Size) == 0;
+    }
+}
+
 /// Brings the cached copy of a group of inputs up to date field by field, without building a
 /// temporary copy. Returns whether any field changed.
 template <size_t N>
@@ -355,7 +374,7 @@ struct DynamicInputsRefresh {
         bool changed = false;
         u32* cached = cache.data();
         const auto refresh = [&](const auto& field) {
-            if (std::memcmp(cached, &field, sizeof(field)) != 0) {
+            if (!SameBytes<sizeof(field)>(cached, &field)) {
                 std::memcpy(cached, &field, sizeof(field));
                 changed = true;
             }
@@ -441,7 +460,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_,
         scheduler.GateSubmitsOnGuestCopies();
         auto& copy_engine = VideoCore::GuestCopyEngine::Instance();
         copy_engine.SetReadProtectionProbe(
-            [](const void* context, VAddr addr, u64 size) {
+            [](const void* context, VAddr addr, u64 size) noexcept {
                 return static_cast<const VideoCore::PageManager*>(context)->HasReadWatchers(addr,
                                                                                             size);
             },
@@ -811,8 +830,7 @@ void Rasterizer::PrepareRenderState(const GraphicsPipeline* pipeline) {
         image.binding.is_target = 1u;
     }
 
-    const auto depth_stencil = GetEffectiveDepthStencilState(regs);
-    if (depth_stencil.needs_attachment) {
+    if (pipeline_cache.DepthStencilState().needs_attachment) {
         const auto htile_address = regs.depth_htile_data_base.GetAddress();
         const auto& hint = liverpool->last_db_extent;
         auto& [image_id, desc] = db_desc;
@@ -950,7 +968,7 @@ bool Rasterizer::BindSquarePass(const GraphicsPipeline& pipeline) {
     // GNM scales the MIN/MAX operands, MIN(s * s, d * d) = MIN(s, d)^2, so a second draw with the
     // same coverage squares what the first one blended. A depth or stencil write of the first
     // draw would change the coverage of the second one.
-    const auto depth_stencil = GetEffectiveDepthStencilState(liverpool->regs);
+    const auto& depth_stencil = pipeline_cache.DepthStencilState();
     if (depth_stencil.depth_write_enable || depth_stencil.stencil_write_enable) {
         if (pipeline.ReportSquarePassSkipped()) {
             LOG_WARNING(Render_Vulkan,
@@ -2009,14 +2027,8 @@ SHAD_NOINLINE void Rasterizer::BindTextures(const Shader::Info& stage,
         image_descriptor_array_sizes[num_image_descriptors++] = num_bindings;
     }
 
-    struct ImageTransition {
-        VideoCore::ImageId image_id;
-        VideoCore::SubresourceRange range;
-        vk::ImageLayout layout;
-        vk::AccessFlags2 access;
-        vk::PipelineStageFlags2 stages;
-    };
-    boost::container::static_vector<ImageTransition, Shader::NUM_IMAGES> transitions;
+    auto& transitions = texture_transitions;
+    transitions.clear();
     u32 texture_binding_index = 0;
     for (auto& image_binding : image_bindings) {
         auto& image_id = image_binding.image_id;
@@ -2097,12 +2109,12 @@ SHAD_NOINLINE void Rasterizer::BindTextures(const Shader::Info& stage,
         }
     }
 
-    VideoCore::Image::Barriers image_barriers;
+    auto& image_barriers = texture_barriers;
+    image_barriers.clear();
     for (const auto& transition : transitions) {
-        auto& image = texture_cache.GetImage(transition.image_id);
-        const auto barriers = image.GetBarriers(transition.layout, transition.access,
-                                                transition.stages, transition.range);
-        image_barriers.insert(image_barriers.end(), barriers.begin(), barriers.end());
+        texture_cache.GetImage(transition.image_id)
+            .AppendBarriers(image_barriers, transition.layout, transition.access,
+                            transition.stages, transition.range);
     }
     if (!image_barriers.empty()) {
         scheduler.EndRendering();
@@ -2438,7 +2450,7 @@ bool Rasterizer::ReadMemory(VAddr addr, u64 size, void* context) {
     buffer_cache.ReadMemory(addr, size);
 
     if (page_manager.HasReadWatcher(addr)) {
-        DisarmSemanticReadWatch(addr, size);
+        VideoCore::GpuAuthorityTracker::Instance().DisarmUnownedReadWatch(addr, size);
     }
     return true;
 }
@@ -2645,7 +2657,7 @@ SHAD_NOINLINE void Rasterizer::UpdateDepthStencilState() const {
     const auto& regs = liverpool->regs;
     auto& dynamic_state = scheduler.GetDynamicState();
 
-    const auto depth_stencil = GetEffectiveDepthStencilState(regs);
+    const auto& depth_stencil = pipeline_cache.DepthStencilState();
     const bool depth_test_enabled = depth_stencil.depth_test_enable;
     dynamic_state.SetDepthTestEnabled(depth_test_enabled);
     dynamic_state.SetDepthWriteEnabled(depth_stencil.depth_write_enable &&

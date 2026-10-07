@@ -141,7 +141,7 @@ struct HullRuntimeInfo : protected CommonHsEsVsRuntimeInfo {
     u32 ls_stride;
     u32 hs_output_base;
 
-    bool operator==(const HullRuntimeInfo&) const = default;
+    bool operator==(const HullRuntimeInfo&) const noexcept = default;
 
     // It might be possible for a non-passthrough TCS to have these conditions, in some dumb
     // situation. In that case, it should be fine to assume passthrough and declare some extra
@@ -174,7 +174,7 @@ struct GeometryRuntimeInfo {
     std::span<const u32> vs_copy;
     u64 vs_copy_hash;
 
-    bool operator==(const GeometryRuntimeInfo& other) const {
+    bool operator==(const GeometryRuntimeInfo& other) const noexcept {
         return num_outputs == other.num_outputs && outputs == other.outputs &&
                num_invocations == other.num_invocations &&
                output_vertices == other.output_vertices && in_primitive == other.in_primitive &&

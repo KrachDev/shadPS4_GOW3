@@ -70,18 +70,22 @@ static Level FromSpdlog(spdlog::level l) {
 }
 
 void VLog(Class log_class, Level level, const char* file, int line, const char* func,
-          fmt::string_view format, fmt::format_args args) {
+          fmt::string_view format, fmt::format_args args) noexcept {
     const auto& logger = ALL_LOGGERS[static_cast<size_t>(log_class)];
     if (!logger) {
         return;
     }
-    fmt::memory_buffer msg;
-    fmt::vformat_to(fmt::appender(msg), format, args);
-    const std::string_view fn = std::string_view(func) == "operator()" ? "lambda" : func;
-    logger->log(ToSpdlog(level), "[{}] <{}> ({}) {}:{} {}: {}", NameOf(log_class),
-                NameOf(ToSpdlog(level)), Common::GetCurrentThreadNameView(),
-                spdlog::source_loc::basename(file), line, fn,
-                std::string_view(msg.data(), msg.size()));
+    try {
+        fmt::memory_buffer msg;
+        fmt::vformat_to(fmt::appender(msg), format, args);
+        const std::string_view fn = std::string_view(func) == "operator()" ? "lambda" : func;
+        logger->log(ToSpdlog(level), "[{}] <{}> ({}) {}:{} {}: {}", NameOf(log_class),
+                    NameOf(ToSpdlog(level)), Common::GetCurrentThreadNameView(),
+                    spdlog::source_loc::basename(file), line, fn,
+                    std::string_view(msg.data(), msg.size()));
+    } catch (...) {
+        // A message that cannot be formatted or allocated is dropped.
+    }
 }
 
 template <typename T>

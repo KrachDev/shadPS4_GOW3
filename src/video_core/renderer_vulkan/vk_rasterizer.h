@@ -310,6 +310,16 @@ private:
     };
     std::array<std::array<CachedImageView, Shader::NUM_IMAGES>, MaxShaderStages>
         cached_texture_views{};
+    /// Scratch of BindTextures, kept off its stack frame.
+    struct ImageTransition {
+        VideoCore::ImageId image_id;
+        VideoCore::SubresourceRange range;
+        vk::ImageLayout layout;
+        vk::AccessFlags2 access;
+        vk::PipelineStageFlags2 stages;
+    };
+    boost::container::static_vector<ImageTransition, Shader::NUM_IMAGES> texture_transitions;
+    VideoCore::Image::Barriers texture_barriers;
     /// Description of the image BindTextureMiss resolves, kept across its mip bindings.
     VideoCore::TextureCache::ImageDesc texture_miss_desc;
     VideoCore::ImageViewInfo texture_miss_base_view;

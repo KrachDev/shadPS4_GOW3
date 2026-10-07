@@ -432,7 +432,7 @@ struct Pthread {
 
 using PthreadT = Pthread*;
 
-extern thread_local Pthread* g_curthread;
+extern constinit thread_local Pthread* g_curthread;
 
 void PthreadTestCancel();
 void PthreadCancelInterrupt() noexcept;

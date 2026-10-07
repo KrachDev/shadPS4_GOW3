@@ -152,7 +152,13 @@ struct GpuAuthorityIds {
 
 class GpuAuthorityTracker {
 public:
-    static GpuAuthorityTracker& Instance() noexcept;
+    /// A plain load once created; the first call constructs the tracker out of line.
+    static GpuAuthorityTracker& Instance() noexcept {
+        if (auto* const tracker = instance.load(std::memory_order_acquire)) [[likely]] {
+            return *tracker;
+        }
+        return CreateInstance();
+    }
 
     void SetRasterizer(Vulkan::Rasterizer* rasterizer_) noexcept;
 
@@ -214,10 +220,15 @@ public:
     void CommitGpuShadowPieces(const GpuShadowPieces& pieces, u64 consumer_tick);
 
     bool HandleCpuRead(VAddr fault_addr, size_t size);
+    /// Disarms the read watch of a page no authority watches.
+    void DisarmUnownedReadWatch(VAddr addr, size_t size);
     void HandleCpuWrite(VAddr addr, size_t size);
     void HandleUnmap(VAddr addr, size_t size);
 
 private:
+    static inline std::atomic<GpuAuthorityTracker*> instance{};
+
+    static GpuAuthorityTracker& CreateInstance() noexcept;
     /// Compares the serial of the running game once, which never changes while it runs.
     [[nodiscard]] bool ResolveGow3FastpathActive() const noexcept;
     void RetireVirtualFenceLocked(const std::shared_ptr<VirtualGpuFence>& fence);

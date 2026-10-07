@@ -844,7 +844,8 @@ if (ENABLE_DISCORD_RPC)
     list(APPEND COMMON src/common/discord_rpc_handler.cpp src/common/discord_rpc_handler.h)
 endif()
 
-set(CORE src/core/aerolib/stubs.cpp
+set(CORE src/core/startup_progress.h
+         src/core/aerolib/stubs.cpp
          src/core/aerolib/stubs.h
          src/core/aerolib/aerolib.cpp
          src/core/aerolib/aerolib.h
@@ -1155,6 +1156,8 @@ set(VIDEO_CORE src/video_core/amdgpu/cb_db_extent.h
                src/video_core/renderer_vulkan/host_passes/postfx_pass.h
                src/video_core/renderer_vulkan/host_passes/pp_pass.cpp
                src/video_core/renderer_vulkan/host_passes/pp_pass.h
+               src/video_core/renderer_vulkan/host_passes/startup_probe.cpp
+               src/video_core/renderer_vulkan/host_passes/startup_probe.h
                src/video_core/host_shader_cache.cpp
                src/video_core/host_shader_cache.h
                src/video_core/host_shaders/host_shader.h
@@ -1193,6 +1196,8 @@ set(IMGUI src/imgui/imgui_config.h
           src/imgui/imgui_layer.h
           src/imgui/imgui_std.h
           src/imgui/imgui_texture.h
+          src/imgui/startup_loading.cpp
+          src/imgui/startup_loading.h
           src/imgui/imgui_translations.cpp
           src/imgui/imgui_translations.h
           src/imgui/friends_layer.cpp

@@ -337,6 +337,8 @@ private:
     /// Starts reuse lookups for the current submission: drops the copies of an earlier one and
     /// applies the writes reported since the last lookup.
     void BeginTransientReuse();
+    /// Cold part of BeginTransientReuse: drops the copies the reported writes overlap.
+    void ApplyTransientInvalidations();
     /// Offset of a copy of the guest range made earlier in the submission, if still valid.
     [[nodiscard]] std::optional<u64> FindTransientReuse(VAddr address, u32 size,
                                                         u64 alignment) const;

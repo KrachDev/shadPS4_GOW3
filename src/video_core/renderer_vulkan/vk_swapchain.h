@@ -47,11 +47,10 @@ public:
         return serial.load(std::memory_order_acquire);
     }
 
-    /// Waits up to timeout_ns until the present with present_id, or a later one, of the given
-    /// swapchain serial reached the display. Safe on any thread. Returns eErrorOutOfDateKHR once
-    /// the serial is gone.
-    [[nodiscard]] vk::Result WaitForPresent(u64 swapchain_serial, u64 present_id,
-                                            u64 timeout_ns) const;
+    /// Checks without blocking whether the present with present_id, or a later one, of the given
+    /// swapchain serial reached the display: eSuccess or eSuboptimalKHR once it did, eTimeout
+    /// before. Safe on any thread. Returns eErrorOutOfDateKHR once the serial is gone.
+    [[nodiscard]] vk::Result PollPresent(u64 swapchain_serial, u64 present_id) const;
 
     /// Whether NVIDIA Reflex latency reduction runs on this swapchain.
     [[nodiscard]] bool HasLowLatency() const {
@@ -156,8 +155,8 @@ private:
 private:
     const Instance& instance;
     const Frontend::WindowSDL& window;
-    /// Held exclusively while the handle is replaced or destroyed, shared by other threads that
-    /// use the handle.
+    /// Held exclusively while the handle is replaced or destroyed and by the externally
+    /// synchronized acquire, present and present wait; shared by the latency calls.
     mutable std::shared_mutex handle_mutex;
     vk::SwapchainKHR swapchain{};
     vk::SurfaceKHR surface{};

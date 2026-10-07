@@ -21,6 +21,7 @@
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/specialization.h"
 #include "video_core/renderer_vulkan/vk_compute_pipeline.h"
+#include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
 
@@ -148,6 +149,8 @@ public:
                            AmdGpu::Liverpool* liverpool);
     ~PipelineCache();
 
+    /// Loads the cached pipelines and starts the compiler; done after presentation starts.
+    void Preload();
     void WarmUp();
     void Sync();
 
@@ -173,6 +176,9 @@ public:
     auto& GetProfile() const {
         return profile;
     }
+
+    /// GetEffectiveDepthStencilState of the current registers.
+    [[nodiscard]] const EffectiveDepthStencilState& DepthStencilState() const noexcept;
 
 private:
     struct OptimizationState;
@@ -262,6 +268,7 @@ private:
     u32 num_new_pipelines{}; // new pipelines added to the cache since the game start
     Program::SpecializationShape::Keys specialization_shape_keys;
     std::unique_ptr<OptimizationState> optimization;
+    mutable EffectiveDepthStencilCache depth_stencil_cache;
     bool async_shader_recompiling{};
 
     static constexpr u32 NumGraphicsPipelineWorkers = 6;

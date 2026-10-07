@@ -14,6 +14,7 @@
 #include "core/libraries/videoout/buffer.h"
 #include "imgui/imgui_texture.h"
 #include "video_core/renderer_vulkan/host_passes/postfx_pass.h"
+#include "video_core/renderer_vulkan/host_passes/startup_probe.h"
 #include "video_core/renderer_vulkan/host_passes/pp_pass.h"
 #include "video_core/renderer_vulkan/vk_display_pacer.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -87,6 +88,7 @@ public:
     }
 
     void SyncPipelineCache();
+    void PreloadPipelineCache();
 
     bool IsHDRSupported() const {
         return swapchain.HasHDR();
@@ -189,6 +191,7 @@ private:
     /// Holds the present of a guest frame until the GPU finished it and its paced present time
     /// came, when VRR pacing is enabled and the display follows the frames.
     void PaceVrrPresent(u64 present_tick, s64 latch_ns);
+    bool StartupProbeDue();
 
     /// Times the end of the presentation work of each guest frame on the GPU.
     void PresentReadyThread(std::stop_token token);
@@ -210,6 +213,10 @@ private:
     Frontend::WindowSDL& window;
     Instance instance;
     HostPasses::PostFxPass postfx_pass;
+    std::unique_ptr<HostPasses::StartupProbe> startup_probe;
+    u64 startup_probe_tick{};
+    bool startup_active{true};
+    s64 startup_next_probe_ms{};
     std::atomic<u32> postfx_options{};
     HostPasses::PostProcessingPass::Settings pp_settings{};
     HostPasses::PostProcessingPass pp_pass;

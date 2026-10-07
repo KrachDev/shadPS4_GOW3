@@ -474,9 +474,9 @@ void Scheduler::SubmitJobNow(SubmitJob& job) {
     submitted_tick.notify_all();
 }
 
-void Scheduler::PopPendingOperations(bool force) {
+SHAD_NO_INLINE void Scheduler::PopPendingOperationsSlow(bool force) {
     const u64 front_tick = pending_ops_front_tick.load(std::memory_order_acquire);
-    if (front_tick == NoPendingOps) [[likely]] {
+    if (front_tick == NoPendingOps) {
         return;
     }
     // A deferred operation waits for the GPU far longer than the few microseconds between draws.

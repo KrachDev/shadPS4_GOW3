@@ -398,13 +398,11 @@ void TextureCache::CopyAlias(ImageId src_id, ImageId dst_id, const Extent3D& ext
     Image& src = slot_images[src_id];
     Image& dst = slot_images[dst_id];
     scheduler.EndRendering();
-    auto barriers =
-        src.GetBarriers(vk::ImageLayout::eTransferSrcOptimal, vk::AccessFlagBits2::eTransferRead,
-                        vk::PipelineStageFlagBits2::eCopy, {});
-    const auto dst_barriers =
-        dst.GetBarriers(vk::ImageLayout::eTransferDstOptimal, vk::AccessFlagBits2::eTransferWrite,
-                        vk::PipelineStageFlagBits2::eCopy, {});
-    barriers.insert(barriers.end(), dst_barriers.begin(), dst_barriers.end());
+    Image::Barriers barriers;
+    src.AppendBarriers(barriers, vk::ImageLayout::eTransferSrcOptimal,
+                       vk::AccessFlagBits2::eTransferRead, vk::PipelineStageFlagBits2::eCopy, {});
+    dst.AppendBarriers(barriers, vk::ImageLayout::eTransferDstOptimal,
+                       vk::AccessFlagBits2::eTransferWrite, vk::PipelineStageFlagBits2::eCopy, {});
     const auto cmdbuf = scheduler.CommandBuffer();
     if (!barriers.empty()) {
         cmdbuf.pipelineBarrier2(vk::DependencyInfo{

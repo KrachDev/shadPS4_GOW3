@@ -7,6 +7,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "common/elf_info.h"
+#include "common/logging/log.h"
 #include "core/memory.h"
 #include "video_core/gpu_authority_tracker.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
@@ -45,9 +46,10 @@ constexpr u64 RetireBudgetBytes = 4ULL << 20;
 
 } // namespace
 
-GpuAuthorityTracker& GpuAuthorityTracker::Instance() noexcept {
-    static GpuAuthorityTracker instance;
-    return instance;
+SHAD_NO_INLINE GpuAuthorityTracker& GpuAuthorityTracker::CreateInstance() noexcept {
+    static GpuAuthorityTracker tracker;
+    instance.store(&tracker, std::memory_order_release);
+    return tracker;
 }
 
 void GpuAuthorityTracker::SetRasterizer(Vulkan::Rasterizer* rasterizer_) noexcept {
@@ -87,11 +89,16 @@ void GpuAuthorityTracker::RegisterAuthority(const GpuAuthorityEntry& entry) {
     std::scoped_lock lock{tracker_mutex};
     for (auto& old_entry : authorities) {
         std::scoped_lock entry_lock{*old_entry->entry_mutex};
-        if (!HasGpuAuthority(old_entry->state)) {
+        if (entry.guest_begin > old_entry->guest_begin || entry.guest_end < old_entry->guest_end) {
             continue;
         }
-        if (entry.guest_begin <= old_entry->guest_begin &&
-            entry.guest_end >= old_entry->guest_end) {
+        // A thread materializing the old entry finishes it: superseding it there would fail
+        // the read that waits for it, which then reads guest RAM unwatched.
+        if (old_entry->state == GpuAuthorityState::Materializing) {
+            LOG_WARNING(Render_Vulkan, "[authority-race] new authority {:#x} kept seq {} materializing",
+                        entry.guest_begin, old_entry->authority_seq);
+        }
+        if (old_entry->state == GpuAuthorityState::GpuAuthoritative) {
             old_entry->state = GpuAuthorityState::Superseded;
             if (old_entry->shadow) {
                 old_entry->shadow->Release();
@@ -650,7 +657,25 @@ bool GpuAuthorityTracker::HandleCpuRead(VAddr fault_addr, size_t size) {
             return true;
         }
     }
-    return ResolveForRamRead(watch_addr, watch_size);
+    // The resolve leaves the page watched only for authorities that remain, so the access is
+    // retried: it reads guest RAM or faults for the newer authority.
+    if (!ResolveForRamRead(watch_addr, watch_size)) {
+        LOG_WARNING(Render_Vulkan, "[authority-race] CPU read of {:#x} found its authority gone",
+                    fault_addr);
+    }
+    return true;
+}
+
+void GpuAuthorityTracker::DisarmUnownedReadWatch(VAddr addr, size_t size) {
+    // Authorities arm their pages under the tracker lock, so a page armed meanwhile for a new
+    // authority is not disarmed by a fault that found none.
+    std::scoped_lock lock{tracker_mutex};
+    const auto [watch_addr, watch_size] = GetReadWatchRange(addr, size);
+    if (rasterizer && !authority_read_watch_ranges.Intersects(watch_addr, watch_size)) {
+        rasterizer->DisarmSemanticReadWatch(addr, size);
+    } else if (rasterizer) {
+        LOG_WARNING(Render_Vulkan, "[authority-race] kept the authority watch of {:#x}", addr);
+    }
 }
 
 void GpuAuthorityTracker::HandleCpuWrite(VAddr addr, size_t size) {

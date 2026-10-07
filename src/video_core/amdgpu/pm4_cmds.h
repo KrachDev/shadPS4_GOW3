@@ -344,7 +344,8 @@ static u64 GetGpuClock64() {
     return static_cast<u64>(ticks);
 }
 
-static u64 GetGpuPerfCounter() {
+/// Out of line: the SysV calls clobber xmm6-15, which every fence signal would save.
+static SHAD_NOINLINE u64 GetGpuPerfCounter() noexcept {
     const auto cpu_freq = Libraries::Kernel::sceKernelGetTscFrequency();
     const auto gpu_freq = Libraries::GnmDriver::sceGnmGetGpuCoreClockFrequency();
 

@@ -17,7 +17,7 @@ struct EffectiveDepthStencilState {
 };
 
 [[nodiscard]] constexpr EffectiveDepthStencilState GetEffectiveDepthStencilState(
-    const AmdGpu::Regs& regs) {
+    const AmdGpu::Regs& regs) noexcept {
     const auto& control = regs.depth_control;
     const auto& render_control = regs.depth_render_control;
     const auto& render_override = regs.depth_render_override;
@@ -79,5 +79,22 @@ struct EffectiveDepthStencilState {
         .stencil_write_enable = needs_attachment && stencil_can_write,
     };
 }
+
+/// GetEffectiveDepthStencilState of one register generation, which a draw asks for several times.
+class EffectiveDepthStencilCache {
+public:
+    [[nodiscard]] const EffectiveDepthStencilState& Get(u64 generation,
+                                                        const AmdGpu::Regs& regs) noexcept {
+        if (generation != cached_generation) [[unlikely]] {
+            state = GetEffectiveDepthStencilState(regs);
+            cached_generation = generation;
+        }
+        return state;
+    }
+
+private:
+    u64 cached_generation{}; // Register generations start at 1.
+    EffectiveDepthStencilState state{};
+};
 
 } // namespace Vulkan

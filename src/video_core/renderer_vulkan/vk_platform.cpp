@@ -168,7 +168,7 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
 
     // Add the windowing system specific extension
     std::vector<const char*> extensions;
-    extensions.reserve(7);
+    extensions.reserve(8);
 
     switch (window_type) {
     case Frontend::WindowSystemType::Headless:
@@ -198,6 +198,8 @@ std::vector<const char*> GetInstanceExtensions(Frontend::WindowSystemType window
         extensions.push_back(VK_KHR_SURFACE_EXTENSION_NAME);
         // Surface support for present ids and present waits is queried through it.
         extensions.push_back(VK_KHR_GET_SURFACE_CAPABILITIES_2_EXTENSION_NAME);
+        // The device swapchain maintenance extension requires it.
+        extensions.push_back(VK_EXT_SURFACE_MAINTENANCE_1_EXTENSION_NAME);
     }
 
     if (EmulatorSettings.IsHdrAllowed()) {

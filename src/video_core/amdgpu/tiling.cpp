@@ -541,7 +541,7 @@ u32 CalculateTileSplit(TileMode tile_mode, ArrayMode array_mode, MicroTileMode m
     return std::min(DRAM_ROW_SIZE, tile_split);
 }
 
-MacroTileMode CalculateMacrotileMode(TileMode tile_mode, u32 bpp, u32 num_samples) {
+MacroTileMode CalculateMacrotileMode(TileMode tile_mode, u32 bpp, u32 num_samples) noexcept {
     ASSERT_MSG(std::has_single_bit(num_samples) && num_samples <= 16, "Invalid sample count {}",
                num_samples);
     ASSERT_MSG(bpp >= 1 && bpp <= 128, "Invalid bpp {}", bpp);

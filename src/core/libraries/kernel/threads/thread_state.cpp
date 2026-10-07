@@ -13,7 +13,7 @@
 
 namespace Libraries::Kernel {
 
-thread_local Pthread* g_curthread{};
+constinit thread_local Pthread* g_curthread{};
 
 Core::Tcb* TcbCtor(Pthread* thread, int initial);
 void TcbDtor(Core::Tcb* oldtls);

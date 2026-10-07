@@ -242,8 +242,14 @@ struct Info : InfoPersistent {
             std::memcpy(flattened_ud_buf.data(), user_data.data(), user_data.size_bytes());
         }
         if (srt_info.walker_func) {
-            srt_info.walker_func(user_data.data(), flattened_ud_buf.data());
+            RunSrtWalker(srt_info.walker_func, user_data.data(), flattened_ud_buf.data());
         }
+    }
+
+    /// Out of line: the SysV call clobbers xmm6-15, which every inlining caller would save.
+    static SHAD_NOINLINE void RunSrtWalker(PFN_SrtWalker walker, const u32* user_data,
+                                           u32* flat_dst) noexcept {
+        walker(user_data, flat_dst);
     }
 
     void ReadTessConstantBuffer(TessellationDataConstantBuffer& tess_constants) const {

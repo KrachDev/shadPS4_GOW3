@@ -603,6 +603,7 @@ private:
     bool present_wait2{};
     bool present_wait{};
     bool surface_capabilities2{};
+    bool surface_maintenance1{};
     bool nv_low_latency2{};
     bool nv_raw_access_chains{};
     bool uniform_buffer_shaders{};

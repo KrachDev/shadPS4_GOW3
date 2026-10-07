@@ -1148,7 +1148,7 @@ SHAD_NO_INLINE bool PipelineCache::OptimizationState::CaptureGraphicsDependency(
     graphics_dependency.active_mask = 0;
     graphics_dependency.fixed_generation = cache.liverpool->GraphicsPipelineGeneration();
     graphics_dependency.depth_stencil_attachment =
-        GetEffectiveDepthStencilState(cache.liverpool->regs).needs_attachment;
+        cache.DepthStencilState().needs_attachment;
     for (u32 logical_index = 0; logical_index < MaxShaderStages; ++logical_index) {
         if (!cache.infos[logical_index]) {
             continue;
@@ -1296,6 +1296,20 @@ SHAD_NO_INLINE void PipelineCache::BuildGeometryRuntimeInfo(Shader::RuntimeInfo&
     DumpShader(gs_info.vs_copy, gs_info.vs_copy_hash, Shader::Stage::Vertex, 0, "copy.bin");
 }
 
+/// Out of line: the vectorized loop needs callee-saved vector registers, which every other stage
+/// would save and restore.
+static SHAD_NO_INLINE void ConvertPsInputs(Shader::FragmentRuntimeInfo& fs_info,
+                                           const AmdGpu::Regs& regs, u32 num_inputs) noexcept {
+    for (u32 i = 0; i < num_inputs; ++i) {
+        // input_offset[4:0], use_default[5], default_value[9:8] and flat_shade[10] become the
+        // bytes param_index, is_default, is_flat and default_value.
+        const u32 raw = std::bit_cast<u32>(regs.ps_inputs[i]);
+        const u32 packed = (raw & 0x1Fu) | ((raw & 0x20u) << 3) | ((raw & 0x400u) << 6) |
+                           ((raw & 0x300u) << 16);
+        std::memcpy(&fs_info.inputs[i], &packed, sizeof(packed));
+    }
+}
+
 SHAD_NOINLINE const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage stage,
                                                                        LogicalStage l_stage) {
     auto& info = runtime_infos[u32(l_stage)];
@@ -1380,15 +1394,7 @@ SHAD_NOINLINE const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(Stage s
         } else {
             info.fs_info.dual_source_blending = false;
         }
-        const auto& ps_inputs = regs.ps_inputs;
-        for (u32 i = 0; i < num_inputs; ++i) {
-            info.fs_info.inputs[i] = {
-                .param_index = u8(ps_inputs[i].input_offset),
-                .is_default = bool(ps_inputs[i].use_default),
-                .is_flat = bool(ps_inputs[i].flat_shade),
-                .default_value = u8(ps_inputs[i].default_value),
-            };
-        }
+        ConvertPsInputs(info.fs_info, regs, num_inputs);
         for (u32 i = 0; i < Shader::MaxColorBuffers; i++) {
             info.fs_info.color_buffers[i] = graphics_key.color_buffers[i];
         }
@@ -1713,6 +1719,9 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
                vk::to_string(cache_result));
     pipeline_cache = std::move(cache);
     Shader::InitializeSrtWalker();
+}
+
+void PipelineCache::Preload() {
     WarmUp();
     SaveNativePipelineCacheCheckpoint();
     StartGraphicsPipelineCompiler();
@@ -1724,12 +1733,16 @@ PipelineCache::~PipelineCache() {
     SaveNativePipelineCache();
 }
 
+const EffectiveDepthStencilState& PipelineCache::DepthStencilState() const noexcept {
+    return depth_stencil_cache.Get(liverpool->GraphicsStateGeneration(), liverpool->regs);
+}
+
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline() {
     auto& opt = *optimization;
 
     if (opt.graphics_valid && opt.graphics_cacheable && opt.graphics_pipeline &&
         liverpool->GraphicsPipelineGeneration() == opt.graphics_dependency.fixed_generation &&
-        GetEffectiveDepthStencilState(liverpool->regs).needs_attachment ==
+        DepthStencilState().needs_attachment ==
             opt.graphics_dependency.depth_stencil_attachment) {
         if (opt.MatchesGraphicsDependency(*this)) {
             return opt.graphics_pipeline;
@@ -1893,8 +1906,7 @@ bool PipelineCache::RefreshGraphicsKey() {
     const auto& regs = liverpool->regs;
     auto& key = graphics_key;
 
-    const auto depth_stencil = GetEffectiveDepthStencilState(regs);
-    const bool db_enabled = depth_stencil.needs_attachment;
+    const bool db_enabled = DepthStencilState().needs_attachment;
 
     key.z_format = db_enabled && regs.depth_buffer.DepthValid()
                        ? regs.depth_buffer.z_info.format

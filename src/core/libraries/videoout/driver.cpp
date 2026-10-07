@@ -12,6 +12,7 @@
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/videoout/driver.h"
 #include "core/libraries/videoout/videoout_error.h"
+#include "core/startup_progress.h"
 #include "imgui/renderer/imgui_core.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -378,6 +379,8 @@ void VideoOutDriver::DrawLastFrame() {
                                    ? main_port.generation.load(std::memory_order_acquire)
                                    : 0;
         presenter->Present(frame, true, generation);
+    } else if (Core::Startup::progress.IsActive()) {
+        DrawBlankFrame();
     }
 }
 
@@ -683,7 +686,8 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                                    now - last_guest_present < LiveFrameSilence;
         const bool redraw_due =
             last_ui_redraw == Clock::time_point{} || now - last_ui_redraw >= UiRedrawPeriod;
-        if (redraw_due && !guest_is_live && (guest_paused || ImGui::Core::MustKeepDrawing())) {
+        if (redraw_due && !guest_is_live && (guest_paused || ImGui::Core::MustKeepDrawing() ||
+                                              Core::Startup::progress.IsActive())) {
             DrawLastFrame();
             last_ui_redraw = Clock::now();
         }
