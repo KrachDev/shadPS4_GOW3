@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <ranges>
 #include <SDL3/SDL_events.h>
 #include <imgui.h>
+#include "common/logging/log.h"
 
 #include "common/path_util.h"
 #include "core/debug_state.h"

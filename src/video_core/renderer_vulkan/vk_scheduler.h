@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <algorithm>
 #include <condition_variable>
 #include <cstddef>
 #include <cstring>

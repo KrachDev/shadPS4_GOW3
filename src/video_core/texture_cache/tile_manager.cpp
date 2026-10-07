@@ -3,6 +3,7 @@
 
 #include "common/alignment.h"
 #include "common/div_ceil.h"
+#include "common/logging/log.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"

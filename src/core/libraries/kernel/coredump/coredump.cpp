@@ -3,6 +3,7 @@
 
 #include <fmt/format.h>
 
+#include "common/assert.h"
 #include "common/logging/log.h"
 #include "core/libraries/kernel/coredump/coredump.h"
 #include "core/libraries/kernel/coredump/coredump_error.h"

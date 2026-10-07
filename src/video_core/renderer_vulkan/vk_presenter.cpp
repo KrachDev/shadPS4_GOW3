@@ -4,6 +4,7 @@
 #include "common/debug.h"
 #include "common/elf_info.h"
 #include "common/io_file.h"
+#include "common/logging/log.h"
 #include "common/path_util.h"
 #include "common/singleton.h"
 #include "common/thread.h"

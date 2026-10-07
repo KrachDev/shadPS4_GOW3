@@ -9,6 +9,7 @@
 #include <optional>
 
 #include <xxhash.h>
+#include "common/logging/log.h"
 
 #include "common/assert.h"
 #include "common/debug.h"

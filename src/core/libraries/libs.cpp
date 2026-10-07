@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/arch.h"
+#include "common/logging/log.h"
+#include "core/emulator_settings.h"
+#include "core/loader/symbols_resolver.h"
 #include "common/elf_info.h"
 #include "common/singleton.h"
 #include "core/libraries/ajm/ajm.h"
@@ -83,6 +86,28 @@
 #include <array>
 
 namespace Libraries {
+
+void RegisterHLEFunction(Core::Loader::SymbolsResolver* sym, const char* nid, const char* library,
+                         u16 library_version, const char* module, u64 address) {
+    Core::Loader::SymbolResolver sr{};
+    sr.name = nid;
+    sr.library = library;
+    sr.library_version = library_version;
+    sr.module = module;
+    sr.type = Core::Loader::SymbolType::Function;
+    sym->AddSymbol(sr, address);
+}
+
+void RegisterHLEObject(Core::Loader::SymbolsResolver* sym, const char* nid, const char* library,
+                       u16 library_version, const char* module, u64 address) {
+    Core::Loader::SymbolResolver sr{};
+    sr.name = nid;
+    sr.library = library;
+    sr.library_version = library_version;
+    sr.module = module;
+    sr.type = Core::Loader::SymbolType::Object;
+    sym->AddSymbol(sr, address);
+}
 
 static void RegisterAudio3d(Core::Loader::SymbolsResolver* sym) {
     if (EmulatorSettings.GetAudioBackend() == AudioBackend::OpenAL) {

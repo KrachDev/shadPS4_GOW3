@@ -3,7 +3,10 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <ranges>
 #include <string>
+#include <unordered_map>
+#include <vector>
 #include <fmt/std.h>
 #include <spdlog/sinks/async_sink.h>
 #include <spdlog/sinks/dup_filter_sink.h>

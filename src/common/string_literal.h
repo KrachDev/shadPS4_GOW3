@@ -4,10 +4,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cstddef>
 
-template <size_t N, typename C = char>
+template <std::size_t N, typename C = char>
 struct StringLiteral {
-    static constexpr size_t len = N;
+    static constexpr std::size_t len = N;
 
     constexpr StringLiteral(const C (&str)[N]) {
         std::copy_n(str, N, value);

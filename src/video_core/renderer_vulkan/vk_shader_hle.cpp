@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "common/alignment.h"
+#include "common/logging/log.h"
 #include "shader_recompiler/info.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"

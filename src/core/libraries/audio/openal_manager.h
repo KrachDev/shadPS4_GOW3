@@ -8,6 +8,7 @@
 #include <vector>
 #include <AL/al.h>
 #include <AL/alc.h>
+#include "common/logging/log.h"
 
 #include "common/logging/log.h"
 #include "core/emulator_settings.h"

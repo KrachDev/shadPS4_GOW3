@@ -17,9 +17,12 @@
 #include "core/libraries/kernel/threads/exception.h"
 #include "core/libraries/kernel/time.h"
 #include "core/thread.h"
-#include "core/tls.h"
 
 #define GLOBAL_PID 0xBAD1
+
+namespace Core {
+struct Tcb;
+}
 
 namespace Core::Loader {
 class SymbolsResolver;

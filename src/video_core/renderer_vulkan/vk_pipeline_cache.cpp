@@ -16,6 +16,7 @@
 #include <ranges>
 #include <span>
 #include <type_traits>
+#include "common/logging/log.h"
 
 #if defined(__AVX2__)
 #include <immintrin.h>

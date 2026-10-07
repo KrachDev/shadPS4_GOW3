@@ -5,6 +5,7 @@
 #include <ranges>
 
 #include "common/assert.h"
+#include "common/logging/log.h"
 #include "common/types.h"
 #include "net_epoll.h"
 

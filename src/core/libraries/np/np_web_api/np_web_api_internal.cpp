@@ -10,6 +10,7 @@
 #include <string_view>
 #include <magic_enum/magic_enum.hpp>
 #include "common/elf_info.h"
+#include "common/logging/log.h"
 #include "core/emulator_settings.h"
 #include "core/libraries/kernel/process.h"
 #include "core/libraries/kernel/time.h"

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <vector>
 #include <png.h>
 #include "common/logging/log.h"
 #include "core/libraries/error_codes.h"

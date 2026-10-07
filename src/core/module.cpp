@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <fmt/format.h>
 #include "common/alignment.h"
 #include "common/arch.h"
@@ -11,6 +12,7 @@
 #include "common/string_util.h"
 #include "core/aerolib/aerolib.h"
 #include "core/cpu_patches.h"
+#include "core/emulator_settings.h"
 #include "core/libraries/error_codes.h"
 #include "core/loader/dwarf.h"
 #include "core/memory.h"
@@ -24,6 +26,14 @@ using EntryFunc = PS4_SYSV_ABI int (*)(size_t args, const void* argp, void* para
 static constexpr u64 ExecutableLoadBase = 0x400000;
 static constexpr u64 GameModuleLoadBase = 0x80000000;
 static constexpr u64 SystemModuleLoadBase = 0x800000000;
+
+bool Module::IsSystemLib() {
+    auto system_path = EmulatorSettings.GetSysModulesDir();
+    if (file.string().starts_with(system_path.string().c_str())) {
+        return true;
+    }
+    return false;
+}
 
 static u64 GetAlignedSize(const elf_program_header& phdr) {
     return (phdr.p_align != 0 ? (phdr.p_memsz + (phdr.p_align - 1)) & ~(phdr.p_align - 1)

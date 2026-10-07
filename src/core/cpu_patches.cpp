@@ -6,6 +6,7 @@
 #include <bitset>
 #include <climits>
 #include <cstring>
+#include <algorithm>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -21,6 +22,7 @@
 #include "common/arch.h"
 #include "common/assert.h"
 #include "common/decoder.h"
+#include "common/logging/log.h"
 #include "common/signal_context.h"
 #include "common/types.h"
 #include "core/signals.h"

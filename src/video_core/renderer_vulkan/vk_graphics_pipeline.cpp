@@ -5,6 +5,7 @@
 #include <atomic>
 #include <utility>
 #include <boost/container/small_vector.hpp>
+#include "common/logging/log.h"
 
 #include "common/assert.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_discard_frag.h"

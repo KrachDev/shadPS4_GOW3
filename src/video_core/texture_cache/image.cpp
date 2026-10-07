@@ -6,6 +6,8 @@
 #include "common/assert.h"
 #include "common/thread.h"
 #include "video_core/gpu_authority_tracker.h"
+#include <algorithm>
+#include "common/logging/log.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
