@@ -16,7 +16,7 @@
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
 static constexpr u32 ShaderBinaryVersion = 12u;
-static constexpr u32 ShaderMetaVersion = 9u;
+static constexpr u32 ShaderMetaVersion = 10u;
 } // namespace Serialization
 
 namespace Vulkan {
@@ -404,6 +404,7 @@ void Info::Serialize(Serialization::Archive& ar) const {
     Serialization::Writer info{ar};
 
     info.Write(this, sizeof(InfoPersistent));
+    info.Write(&stores, sizeof(stores));
     info.Write(flattened_ud_buf);
     srt_info.Serialize(ar);
 }
@@ -412,6 +413,7 @@ bool Info::Deserialize(Serialization::Archive& ar) {
     Serialization::Reader info{ar};
 
     info.Read(this, sizeof(Shader::InfoPersistent));
+    info.Read(&stores, sizeof(stores));
     info.Read(flattened_ud_buf);
 
     return srt_info.Deserialize(ar);
