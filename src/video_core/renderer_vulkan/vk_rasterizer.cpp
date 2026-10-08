@@ -450,7 +450,7 @@ class ConditionalRenderingScope {
 public:
     explicit ConditionalRenderingScope(const Instance& instance, AmdGpu::Liverpool* liverpool,
                                        VideoCore::BufferCache& buffer_cache,
-                                       std::vector<vk::BufferMemoryBarrier2>& barriers) {
+                                       Pipeline::BufferBarriers& barriers) {
         if (!instance.IsConditionalRenderingSupported() || !liverpool ||
             !liverpool->IsDrawPredicated()) {
             return;

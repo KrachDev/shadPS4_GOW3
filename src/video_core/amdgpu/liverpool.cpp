@@ -2223,6 +2223,10 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid, u3
 
             ++graphics_pipeline_generation;
             ++graphics_state_generation;
+            if constexpr (!is_indirect) {
+                PrepareGuestWrite(acb.data(), static_cast<u64>(total_packet_dwords) * sizeof(u32));
+                PrepareGuestWrite(queue.read_addr, sizeof(u32));
+            }
             acb = NextPacket(acb, total_packet_dwords);
             if constexpr (!is_indirect) {
                 *queue.read_addr += total_packet_dwords;

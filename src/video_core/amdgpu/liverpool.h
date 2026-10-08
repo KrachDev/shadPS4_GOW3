@@ -192,7 +192,6 @@ public:
         return predication.inverted;
     }
 
-
 private:
     struct Task {
         struct promise_type {
