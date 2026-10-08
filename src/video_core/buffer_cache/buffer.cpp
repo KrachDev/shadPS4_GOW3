@@ -108,9 +108,6 @@ Buffer::Buffer(const Vulkan::Instance& instance_, Vulkan::Scheduler& scheduler_,
     : cpu_addr{cpu_addr_}, size_bytes{size_bytes_}, uid{global_uid.Next()}, instance{&instance_},
       scheduler{&scheduler_}, usage{usage_},
       buffer{instance->GetDevice(), instance->GetAllocator()} {
-    if (instance->IsConditionalRenderingSupported()) {
-        flags |= vk::BufferUsageFlagBits::eConditionalRenderingEXT;
-    }
     // Create buffer object.
     const bool concurrent = transfer_shared && instance->HasTransferQueue();
     const std::array queue_families{instance->GetGraphicsQueueFamilyIndex(),

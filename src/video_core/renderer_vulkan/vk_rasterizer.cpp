@@ -446,62 +446,6 @@ namespace {
 
 } // Anonymous namespace
 
-class ConditionalRenderingScope {
-public:
-    explicit ConditionalRenderingScope(const Instance& instance, AmdGpu::Liverpool* liverpool,
-                                       VideoCore::BufferCache& buffer_cache,
-                                       Pipeline::BufferBarriers& barriers) {
-        if (!instance.IsConditionalRenderingSupported() || !liverpool ||
-            !liverpool->IsDrawPredicated()) {
-            return;
-        }
-        pred_address = liverpool->GetPredicationAddress();
-        std::tie(buffer, offset) = buffer_cache.ObtainBuffer(pred_address, sizeof(u32), false);
-        if (buffer) {
-            if (auto barrier = buffer->GetBarrier(
-                    vk::AccessFlagBits2::eConditionalRenderingReadEXT,
-                    vk::PipelineStageFlagBits2::eConditionalRenderingEXT)) {
-                barriers.emplace_back(*barrier);
-            }
-            // Map hardware draw_op to Vulkan conditional rendering inverted flag (e.g. Detroit)
-            inverted = liverpool->IsPredicationInverted();
-            active = true;
-        } else {
-            LOG_WARNING(Render_Vulkan, "Predication active at {:#x}, but buffer not found in cache",
-                        pred_address);
-        }
-    }
-
-    void Begin(const CommandRecorder& cmdbuf) const {
-        if (active && buffer) {
-            LOG_TRACE(Render_Vulkan,
-                      "beginConditionalRenderingEXT: addr = {:#x}, offset = {:#x}, inverted = {}",
-                      pred_address, offset, inverted);
-            const vk::ConditionalRenderingBeginInfoEXT cr_info = {
-                .buffer = buffer->Handle(),
-                .offset = offset,
-                .flags = inverted ? vk::ConditionalRenderingFlagBitsEXT::eInverted
-                                  : vk::ConditionalRenderingFlagsEXT{},
-            };
-            cmdbuf.beginConditionalRenderingEXT(cr_info);
-        }
-    }
-
-    void End(const CommandRecorder& cmdbuf) {
-        if (active && buffer) {
-            cmdbuf.endConditionalRenderingEXT();
-            active = false;
-        }
-    }
-
-private:
-    VAddr pred_address{0};
-    VideoCore::Buffer* buffer{nullptr};
-    u64 offset{0};
-    bool inverted{false};
-    bool active{false};
-};
-
 Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_,
                        AmdGpu::Liverpool* liverpool_)
     : instance{instance_}, scheduler{scheduler_}, page_manager{this},
@@ -984,7 +928,6 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     FinalizeBuffers(push_data, true);
     buffer_cache.FinalizeVertexIndexBuffers(buffer_barriers);
 
-    ConditionalRenderingScope cr_scope{instance, liverpool, buffer_cache, buffer_barriers};
     BindPipelineResources(pipeline);
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
@@ -995,7 +938,6 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
 
     const auto cmdbuf = scheduler.CommandBuffer();
     scheduler.BindGraphicsPipeline(pipeline->Handle());
-    cr_scope.Begin(cmdbuf);
 
     const GpuTimingContext timing{
         scheduler, scheduler.HasGpuTiming() ? DrawTimingLabel(*pipeline, state) : GpuTimingLabel{}};
@@ -1012,7 +954,6 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset) {
     if (BindSquarePass(*pipeline)) [[unlikely]] {
         draw();
     }
-    cr_scope.End(cmdbuf);
     DebugState.IncDrawCall();
     MarkImageWrites(false);
 
@@ -1085,7 +1026,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
         }
     }
 
-    ConditionalRenderingScope cr_scope{instance, liverpool, buffer_cache, buffer_barriers};
     BindPipelineResources(pipeline);
     UpdateDynamicState(pipeline, is_indexed);
     scheduler.BeginRendering(state);
@@ -1095,7 +1035,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
 
     const auto cmdbuf = scheduler.CommandBuffer();
     scheduler.BindGraphicsPipeline(pipeline->Handle());
-    cr_scope.Begin(cmdbuf);
 
     if (is_indexed) {
         ASSERT(sizeof(VkDrawIndexedIndirectCommand) == stride);
@@ -1125,7 +1064,6 @@ void Rasterizer::DrawIndirect(bool is_indexed, VAddr arg_address, u32 offset, u3
     if (BindSquarePass(*pipeline)) [[unlikely]] {
         draw();
     }
-    cr_scope.End(cmdbuf);
     DebugState.IncDrawCall();
     MarkImageWrites(false);
 
@@ -1154,14 +1092,11 @@ void Rasterizer::DispatchDirect() {
     }
 
     scheduler.EndRendering();
-    ConditionalRenderingScope cr_scope{instance, liverpool, buffer_cache, buffer_barriers};
     BindPipelineResources(pipeline);
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
-    cr_scope.Begin(cmdbuf);
     cmdbuf.dispatch(cs_program.dim_x, cs_program.dim_y, cs_program.dim_z);
-    cr_scope.End(cmdbuf);
     DebugState.IncDispatch();
     MarkImageWrites(true);
 
@@ -1195,14 +1130,11 @@ void Rasterizer::DispatchIndirect(VAddr address, u32 offset, u32 size) {
     }
 
     scheduler.EndRendering();
-    ConditionalRenderingScope cr_scope{instance, liverpool, buffer_cache, buffer_barriers};
     BindPipelineResources(pipeline);
 
     const auto cmdbuf = scheduler.CommandBuffer();
     cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->Handle());
-    cr_scope.Begin(cmdbuf);
     cmdbuf.dispatchIndirect(buffer->Handle(), base);
-    cr_scope.End(cmdbuf);
     DebugState.IncDispatch();
     MarkImageWrites(true);
 
