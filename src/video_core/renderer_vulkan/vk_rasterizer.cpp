@@ -472,7 +472,7 @@ public:
         }
     }
 
-    void Begin(vk::CommandBuffer cmdbuf) const {
+    void Begin(const CommandRecorder& cmdbuf) const {
         if (active && buffer) {
             LOG_TRACE(Render_Vulkan,
                       "beginConditionalRenderingEXT: addr = {:#x}, offset = {:#x}, inverted = {}",
@@ -487,7 +487,7 @@ public:
         }
     }
 
-    void End(vk::CommandBuffer cmdbuf) {
+    void End(const CommandRecorder& cmdbuf) {
         if (active && buffer) {
             cmdbuf.endConditionalRenderingEXT();
             active = false;

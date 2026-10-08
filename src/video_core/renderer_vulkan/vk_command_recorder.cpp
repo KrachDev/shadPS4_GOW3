@@ -211,6 +211,18 @@ void CommandRecorder::pipelineBarrier2(const vk::DependencyInfo& info) const {
     writer.Copy(info.pImageMemoryBarriers, num_image);
 }
 
+void CommandRecorder::beginConditionalRenderingEXT(
+    const vk::ConditionalRenderingBeginInfoEXT& info) const {
+    CheckNoChain(info.pNext);
+    scheduler->Record([info](vk::CommandBuffer cmdbuf) {
+        cmdbuf.beginConditionalRenderingEXT(info);
+    });
+}
+
+void CommandRecorder::endConditionalRenderingEXT() const {
+    scheduler->Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endConditionalRenderingEXT(); });
+}
+
 void CommandRecorder::bindPipeline(vk::PipelineBindPoint bind_point, vk::Pipeline pipeline) const {
     scheduler->NotifyGpuTimingPipeline(bind_point, pipeline);
     scheduler->Record([bind_point, pipeline](vk::CommandBuffer cmdbuf) {
