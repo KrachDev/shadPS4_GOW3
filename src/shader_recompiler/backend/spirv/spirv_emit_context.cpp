@@ -9,7 +9,6 @@
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/runtime_info.h"
 #include "video_core/buffer_cache/buffer_cache.h"
-#include "stream.h"
 
 #include <boost/container/static_vector.hpp>
 #include <fmt/format.h>
@@ -1212,26 +1211,11 @@ Id EmitContext::DefineGetBdaPointer() {
     return func;
 }
 
-Id EmitContext::OpRawAccessChainNV(Id result_type, Id base, Id stride, Id index, Id offset,
-                                   spv::RawAccessChainOperandsMask operands) {
-    if (static_cast<u32>(operands) != 0) {
-        code->Reserve(8);
-        return *code << Sirit::OpId{spv::Op::OpRawAccessChainNV, result_type}
-                     << base
-                     << stride
-                     << index
-                     << offset
-                     << static_cast<u32>(operands)
-                     << Sirit::EndOp{};
-    } else {
-        code->Reserve(7);
-        return *code << Sirit::OpId{spv::Op::OpRawAccessChainNV, result_type}
-                     << base
-                     << stride
-                     << index
-                     << offset
-                     << Sirit::EndOp{};
-    }
+Id EmitContext::OpRawAccessChainNV(Id result_type, Id base, [[maybe_unused]] Id stride, Id index,
+                                   Id offset,
+                                   [[maybe_unused]] spv::RawAccessChainOperandsMask operands) {
+    const Id element = Sirit::ValidId(index) && index != u32_zero_value ? index : offset;
+    return OpAccessChain(result_type, base, u32_zero_value, element);
 }
 
 Id EmitContext::EmitBufferAccess(Id scalar_type, Id base, Id index, u32 shift, u32 count,
