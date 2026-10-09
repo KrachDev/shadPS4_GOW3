@@ -2676,10 +2676,13 @@ SHAD_NOINLINE void Rasterizer::UpdateDepthStencilState() const {
     dynamic_state.SetDepthBiasEnabled(depth_bias_enabled);
     if (depth_bias_enabled) {
         const bool front = regs.polygon_control.enable_polygon_offset_front;
+        const float slope = front ? regs.poly_offset.front_scale : regs.poly_offset.back_scale;
+        const float slope_factor =
+            VideoCore::GpuAuthorityTracker::Instance().IsGow3FastpathActive() ? slope : (slope / 16.f);
         dynamic_state.SetDepthBias(
             front ? regs.poly_offset.front_offset : regs.poly_offset.back_offset,
             regs.poly_offset.depth_bias,
-            (front ? regs.poly_offset.front_scale : regs.poly_offset.back_scale) / 16.f);
+            slope_factor);
     }
 
     const bool stencil_test_enabled = depth_stencil.stencil_test_enable;
