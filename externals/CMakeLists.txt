@@ -160,6 +160,7 @@ endif()
 
 # sirit
 add_subdirectory(sirit)
+target_include_directories(sirit INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/sirit/src)
 if (WIN32)
     target_compile_options(sirit PRIVATE $<$<CXX_COMPILER_ID:Clang>:-Wno-error=unused-command-line-argument>)
 endif()

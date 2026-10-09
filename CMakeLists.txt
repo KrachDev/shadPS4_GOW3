@@ -1304,7 +1304,7 @@ target_link_libraries(shadps4 PRIVATE stb::headers lfreist-hwinfo::hwinfo nlohma
 target_link_libraries(shadps4 PRIVATE Freetype::Freetype)
 target_link_libraries(shadps4 PRIVATE libprotobuf)
 target_link_libraries(shadps4 PRIVATE ZArchive::zarchive libzstd_static)
-target_include_directories(shadps4 PRIVATE "${SHADNET_PROTO_OUT}" "${CMAKE_CURRENT_SOURCE_DIR}/externals/zstd/lib")
+target_include_directories(shadps4 PRIVATE "${SHADNET_PROTO_OUT}" "${CMAKE_CURRENT_SOURCE_DIR}/externals/zstd/lib" "${CMAKE_CURRENT_SOURCE_DIR}/externals/sirit/src")
 
 if (${CMAKE_SYSTEM_NAME} STREQUAL "FreeBSD")
     target_link_libraries(shadps4 PRIVATE "/usr/lib/libusb.so")
