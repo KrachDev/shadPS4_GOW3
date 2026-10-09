@@ -1214,7 +1214,7 @@ Id EmitContext::DefineGetBdaPointer() {
 Id EmitContext::OpRawAccessChainNV(Id result_type, Id base, [[maybe_unused]] Id stride, Id index,
                                    Id offset,
                                    [[maybe_unused]] spv::RawAccessChainOperandsMask operands) {
-    const Id element = Sirit::ValidId(index) && index != u32_zero_value ? index : offset;
+    const Id element = (index.value != 0 && index.value != u32_zero_value.value) ? index : offset;
     return OpAccessChain(result_type, base, u32_zero_value, element);
 }
 
