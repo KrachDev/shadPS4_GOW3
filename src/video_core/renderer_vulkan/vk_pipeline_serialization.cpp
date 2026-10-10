@@ -208,6 +208,7 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
     sdata.Read(&vertex_bindings, sizeof(vertex_bindings));
     sdata.Read(&divisors, sizeof(divisors));
     sdata.Read(multisampling);
+    multisampling.sampleShadingEnable = false;
     sdata.Read(tcs);
     sdata.Read(tes);
     sdata.Read(fragment);
